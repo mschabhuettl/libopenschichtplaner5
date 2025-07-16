@@ -1,6 +1,8 @@
+# note.py
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import List
 from ..db.reader import DBFTable
 
 
@@ -17,19 +19,21 @@ class Note:
         """
         Converts a DBF record (dict) into a Note object.
         """
-        # Here, print all the field names of the record to identify the correct field names
-        print(record)  # Add this line to inspect the record's structure
+        # Decode CP1252 to UTF-8 and remove null bytes
+        def decode_cp1252(text: str) -> str:
+            return text.encode('latin1').decode('cp1252').replace('\x00', '')
 
+        # Ensure the fields exist and decode text fields
         return Note(
             id=record['ID'],  # Make sure 'ID' exists in the DBF file
-            employee_id=record.get('EMPLOYEE_ID', 0),  # Adjust field name if necessary
+            employee_id=record.get('EMPLOYEEID', 0),  # Adjust field name if necessary
             date=record['DATE'],  # Ensure 'DATE' is correct
-            text1=record['TEXT1'],  # Ensure 'TEXT1' is correct
-            text2=record['TEXT2'],  # Ensure 'TEXT2' is correct
+            text1=decode_cp1252(record['TEXT1']),  # Decode text1 field
+            text2=decode_cp1252(record['TEXT2'])   # Decode text2 field
         )
 
 
-def load_notes(dbf_path: Path) -> list[Note]:
+def load_notes(dbf_path: Path) -> List[Note]:
     """
     Loads the 5NOTE DBF table and returns a list of `Note` objects.
 

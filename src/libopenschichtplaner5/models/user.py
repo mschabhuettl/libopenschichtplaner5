@@ -1,6 +1,7 @@
+# user.py
 from dataclasses import dataclass
-from typing import List
 from pathlib import Path
+from typing import List, Optional  # Added import for Optional
 from ..db.reader import DBFTable
 from ..utils.strings import normalize_string
 
@@ -12,6 +13,12 @@ class User:
     name: str
     description: str
     admin: int
+    digest: Optional[str] = ""
+    rights: Optional[str] = ""
+    category: Optional[str] = ""
+    addempl: Optional[int] = 0
+    wduties: Optional[int] = 0
+    wnotes: Optional[int] = 0
 
     @classmethod
     def from_record(cls, record: dict) -> "User":
@@ -21,6 +28,12 @@ class User:
             name=normalize_string(record.get("NAME")),
             description=normalize_string(record.get("DESCRIP")),
             admin=int(record.get("ADMIN", 0)),
+            digest=normalize_string(record.get("DIGEST", "")),
+            rights=normalize_string(record.get("RIGHTS", "")),
+            category=normalize_string(record.get("CATEGORY", "")),
+            addempl=int(record.get("ADDEMPL", 0)),
+            wduties=int(record.get("WDUTIES", 0)),
+            wnotes=int(record.get("WNOTES", 0)),
         )
 
 
