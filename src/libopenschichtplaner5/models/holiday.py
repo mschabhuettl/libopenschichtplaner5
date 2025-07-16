@@ -1,6 +1,7 @@
+# holiday.py
 from dataclasses import dataclass
-from typing import List
 from pathlib import Path
+from typing import List
 from ..db.reader import DBFTable
 from ..utils.strings import normalize_string
 
@@ -8,7 +9,7 @@ from ..utils.strings import normalize_string
 @dataclass
 class Holiday:
     id: int
-    date: str  # Assuming DATE is stored as a string (e.g., "YYYY-MM-DD")
+    date: str
     name: str
     interval: int
     reserved: str
@@ -20,7 +21,7 @@ class Holiday:
             date=normalize_string(record.get("DATE")),
             name=normalize_string(record.get("NAME")),
             interval=int(record.get("INTERVAL", 0)),
-            reserved=normalize_string(record.get("RESERVED")),
+            reserved=normalize_string(record.get("RESERVED", "")),
         )
 
 

@@ -1,8 +1,8 @@
+# leave_entitlement.py
 from dataclasses import dataclass
-from typing import List
 from pathlib import Path
+from typing import List, Optional
 from ..db.reader import DBFTable
-from ..utils.strings import normalize_string
 
 
 @dataclass
@@ -12,6 +12,9 @@ class LeaveEntitlement:
     year: int
     leave_type_id: int
     entitlement: float
+    rest: Optional[float] = 0.0
+    in_days: Optional[float] = 0.0
+    reserved: Optional[str] = ""
 
     @classmethod
     def from_record(cls, record: dict) -> "LeaveEntitlement":
@@ -21,6 +24,9 @@ class LeaveEntitlement:
             year=int(record.get("YEAR")),
             leave_type_id=int(record.get("LEAVETYPID")),
             entitlement=float(record.get("ENTITLEMNT", 0)),
+            rest=float(record.get("REST", 0)),
+            in_days=float(record.get("INDAYS", 0)),
+            reserved=record.get("RESERVED", ""),
         )
 
 
