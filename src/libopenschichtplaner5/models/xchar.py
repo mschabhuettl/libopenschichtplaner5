@@ -4,15 +4,16 @@ from typing import Optional, List
 from decimal import Decimal
 
 @dataclass
-class WorkLocation:
-    """5WOPL - Arbeitsorte"""
+class XChar:
+    """5XCHAR - Zuschlagsregeln"""
     id: int
     name: str
-    shortname: str
     position: int
-    colortext: int = 0
-    colorbar: int = 0
-    colorbk: int = 0
-    bold: int = 0
+    start: int
+    end: int
+    validity: int
+    validdays: str
+    holrule: int
+    date: Optional[date] = None
     hide: int = 0
     reserved: Optional[str] = ""

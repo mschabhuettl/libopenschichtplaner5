@@ -1,48 +1,47 @@
 # shift.py
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Optional
-from ..db.reader import DBFTable
-from ..utils.strings import normalize_string
-
+from datetime import date
+from typing import Optional, List
+from decimal import Decimal
 
 @dataclass
 class Shift:
+    """5SHIFT - Schichtdefinitionen"""
     id: int
     name: str
     shortname: str
-    position: Optional[int]
-    colortext: Optional[int]
-    colorbar: Optional[int] = 0
-    colorbk: Optional[int] = 0
-    bold: Optional[int] = 0
-    startend: Optional[str] = ""
-    duration: Optional[float] = 0.0
-    noextra: Optional[int] = 0
-    category: Optional[str] = ""
-    hide: Optional[int] = 0
+    position: int
+    colortext: int = 16777215
+    colorbar: int = 16777215
+    colorbk: int = 16744448
+    bold: int = 0
+    # Zeiten pro Wochentag
+    startend0: str = ""  # Montag
+    startend1: str = ""  # Dienstag
+    startend2: str = ""  # Mittwoch
+    startend3: str = ""  # Donnerstag
+    startend4: str = ""  # Freitag
+    startend5: str = ""  # Samstag
+    startend6: str = ""  # Sonntag
+    startend7: str = ""  # Reserve/Feiertag?
+    # Dauer pro Wochentag
+    duration0: float = 0.0
+    duration1: float = 0.0
+    duration2: float = 0.0
+    duration3: float = 0.0
+    duration4: float = 0.0
+    duration5: float = 0.0
+    duration6: float = 0.0
+    duration7: float = 0.0
+    noextra: int = 0
+    category: int = 0
+    hide: int = 0
     reserved: Optional[str] = ""
-
-    @classmethod
-    def from_record(cls, record: dict) -> "Shift":
-        return cls(
-            id=int(record.get("ID", 0)),
-            name=normalize_string(record.get("NAME")),
-            shortname=normalize_string(record.get("SHORTNAME")),
-            position=int(record.get("POSITION")) if record.get("POSITION") else None,
-            colortext=int(record.get("COLORTEXT")) if record.get("COLORTEXT") else None,
-            colorbar=int(record.get("COLORBAR", 0)),
-            colorbk=int(record.get("COLORBK", 0)),
-            bold=int(record.get("BOLD", 0)),
-            startend=normalize_string(record.get("STARTEND", "")),
-            duration=float(record.get("DURATION0", 0.0)),  # Assuming DURATION0 as an example
-            noextra=int(record.get("NOEXTRA", 0)),
-            category=record.get("CATEGORY", ""),
-            hide=int(record.get("HIDE", 0)),
-            reserved=record.get("RESERVED", ""),
-        )
-
-
-def load_shifts(dbf_path: str | Path) -> List[Shift]:
-    table = DBFTable(dbf_path)
-    return [Shift.from_record(record) for record in table.records()]
+    
+    def get_weekday_time(self, weekday: int) -> str:
+        """Gibt die Arbeitszeit für einen Wochentag zurück (0=Mo, 6=So)."""
+        return getattr(self, f"startend{weekday***REMOVED***", "")
+    
+    def get_weekday_duration(self, weekday: int) -> float:
+        """Gibt die Dauer für einen Wochentag zurück."""
+        return getattr(self, f"duration{weekday***REMOVED***", 0.0)

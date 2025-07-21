@@ -1,18 +1,13 @@
-# absence.py
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional, List
 from decimal import Decimal
 
 @dataclass
-class Absence:
-    """5ABSEN - Abwesenheiten"""
+class Overtime:
+    """5OVER - Überstunden"""
     id: int
     employee_id: int
     date: date
-    leave_type_id: int
-    type: int
-    interval: Optional[int] = None
-    start: Optional[int] = None
-    end: Optional[int] = None
+    hours: float
     reserved: Optional[str] = ""

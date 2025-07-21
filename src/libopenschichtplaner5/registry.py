@@ -22,7 +22,7 @@ from libopenschichtplaner5.models.group import Group, load_groups
 from libopenschichtplaner5.models.holiday_assignment import HolidayAssignment, load_holiday_assignments
 from libopenschichtplaner5.models.holiday import Holiday, load_holidays
 from libopenschichtplaner5.models.leave_entitlement import LeaveEntitlement, load_leave_entitlements
-from libopenschichtplaner5.models.leave_type import LeaveType, load_leavetypes
+from libopenschichtplaner5.models.leave_type import LeaveType, load_leave_types
 from libopenschichtplaner5.models.employee_shift import EmployeeShift, load_employee_shifts
 from libopenschichtplaner5.models.note import Note, load_notes
 from libopenschichtplaner5.models.period import Period, load_periods
@@ -40,7 +40,7 @@ from libopenschichtplaner5.models.shift_rule import ShiftRule, load_shift_rules
 ModelType = Union[Employee, Shift, Group, User]
 LoaderFunction = Callable[[Path], List[ModelType]]
 
-# Central registry mapping DBF table names to their corresponding loader function
+# Aktualisieren Sie die TABLE_REGISTRY mit:
 TABLE_REGISTRY: Dict[str, LoaderFunction] = {
     "5ABSEN": load_absences,
     "5BOOK": load_books,
@@ -58,9 +58,10 @@ TABLE_REGISTRY: Dict[str, LoaderFunction] = {
     "5HOBAN": load_holiday_assignments,
     "5HOLID": load_holidays,
     "5LEAEN": load_leave_entitlements,
-    "5LEAVT": load_leavetypes,
-    "5MASHI": load_employee_shifts,
+    "5LEAVT": load_leave_types,  # KORRIGIERT: load_leavetypes → load_leave_types
+    "5MASHI": load_employee_shifts,  # KORRIGIERT: Name!
     "5NOTE": load_notes,
+    "5OVER": load_overtime,  # NEU!
     "5PERIO": load_periods,
     "5RESTR": load_shift_restrictions,
     "5SHDEM": load_shift_schedules,
@@ -70,7 +71,7 @@ TABLE_REGISTRY: Dict[str, LoaderFunction] = {
     "5USER": load_users,
     "5USETT": load_user_settings,
     "5WOPL": load_work_locations,
-    "5XCHAR": load_shift_rules,
+    "5XCHAR": load_xchar,  # KORRIGIERT: Name!
 ***REMOVED***
 
 # List of allowed table names (used in CLI argument parser)

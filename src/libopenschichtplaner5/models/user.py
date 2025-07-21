@@ -1,42 +1,42 @@
 # user.py
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Optional  # Added import for Optional
-from ..db.reader import DBFTable
-from ..utils.strings import normalize_string
-
+from datetime import date
+from typing import Optional, List
+from decimal import Decimal
 
 @dataclass
 class User:
+    """5USER - Benutzer"""
     id: int
     position: int
     name: str
-    description: str
-    admin: int
+    descrip: str
+    admin: int = 0
     digest: Optional[str] = ""
-    rights: Optional[str] = ""
-    category: Optional[str] = ""
-    addempl: Optional[int] = 0
-    wduties: Optional[int] = 0
-    wnotes: Optional[int] = 0
-
-    @classmethod
-    def from_record(cls, record: dict) -> "User":
-        return cls(
-            id=int(record.get("ID", 0)),
-            position=int(record.get("POSITION")),
-            name=normalize_string(record.get("NAME")),
-            description=normalize_string(record.get("DESCRIP")),
-            admin=int(record.get("ADMIN", 0)),
-            digest=normalize_string(record.get("DIGEST", "")),
-            rights=normalize_string(record.get("RIGHTS", "")),
-            category=normalize_string(record.get("CATEGORY", "")),
-            addempl=int(record.get("ADDEMPL", 0)),
-            wduties=int(record.get("WDUTIES", 0)),
-            wnotes=int(record.get("WNOTES", 0)),
-        )
-
-
-def load_users(dbf_path: str | Path) -> List[User]:
-    table = DBFTable(dbf_path)
-    return [User.from_record(record) for record in table.records()]
+    rights: int = 0
+    category: str = ""
+    addempl: int = 0
+    wduties: int = 0
+    wabsences: int = 0
+    wovertimes: int = 0
+    wnotes: int = 0
+    wdeviation: int = 0
+    wcycleass: int = 0
+    wswaponly: int = 0
+    wpast: int = 0
+    waccemwnd: int = 0
+    waccgrwnd: int = 0
+    showabs: int = 0
+    shownotes: int = 0
+    showstats: int = 0
+    raccemwnd: int = 0
+    raccgrwnd: int = 0
+    backup: int = 0
+    hidebarin: int = 0
+    hidebarno: int = 0
+    accvownd: int = 0
+    accadmwnd: int = 0
+    minitable: int = 0
+    report: str = ""
+    hide: int = 0
+    reserved: Optional[str] = ""
