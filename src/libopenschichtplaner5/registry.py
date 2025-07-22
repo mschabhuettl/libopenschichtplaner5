@@ -40,8 +40,6 @@ try:
     from .models.overtime import Overtime, load_overtime
 except ImportError:
     print("Warning: overtime.py not found - creating dummy loader")
-
-
     def load_overtime(path):
         return []
 
@@ -53,8 +51,6 @@ except ImportError:
         from .models.shift_rule import ShiftRule as XChar, load_shift_rules as load_xchar
     except ImportError:
         print("Warning: xchar.py/shift_rule.py not found - creating dummy loader")
-
-
         def load_xchar(path):
             return []
 

@@ -1,39 +1,31 @@
-# holiday_assignment.py
 from dataclasses import dataclass
-from typing import List
-from datetime import date
 from pathlib import Path
+from typing import List, Optional
 from ..db.reader import DBFTable
 from ..utils.strings import normalize_string
 
 
 @dataclass
-class HolidayAssignment:
+class GroupAssignment:
+    """5GRASG - Gruppenzuweisungen"""
     id: int
     employee_id: int
-    holiday_id: int
-    start_date: date
-    end_date: date
-    status: str
+    group_id: int
+    position: int = 0
+    reserved: Optional[str] = ""
 
     @classmethod
-    def from_record(cls, record: dict) -> "HolidayAssignment":
+    def from_record(cls, record: dict) -> "GroupAssignment":
         return cls(
             id=int(record.get("ID", 0)),
-            employee_id=int(record.get("EMPLOYEE_ID", 0)),
-            holiday_id=int(record.get("HOLIDAY_ID", 0)),
-            start_date=record.get("START_DATE", ""),
-            end_date=record.get("END_DATE", ""),
-            status=normalize_string(record.get("STATUS", "")),
+            employee_id=int(record.get("EMPLOYEEID", 0)),
+            group_id=int(record.get("GROUPID", 0)),
+            position=int(record.get("POSITION", 0)),
+            reserved=normalize_string(record.get("RESERVED", ""))
         )
 
 
-def load_holiday_assignments(dbf_path: str | Path) -> List[HolidayAssignment]:
-    """
-    Loads the 5HOBAN DBF table and returns a list of `HolidayAssignment` objects.
-
-    :param dbf_path: Path to the 5HOBAN DBF file
-    :return: List of `HolidayAssignment` instances
-    """
+def load_group_assignments(dbf_path: str | Path) -> List[GroupAssignment]:
+    """Load group assignments from DBF file."""
     table = DBFTable(dbf_path)
-    return [HolidayAssignment.from_record(record) for record in table.records()]
+    return [GroupAssignment.from_record(record) for record in table.records()]

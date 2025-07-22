@@ -1,6 +1,8 @@
+# holiday_assignment.py
 from dataclasses import dataclass
+from typing import List
+from datetime import date
 from pathlib import Path
-from typing import List, Optional
 from ..db.reader import DBFTable
 from ..utils.strings import normalize_string
 
