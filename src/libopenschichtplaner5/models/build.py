@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from typing import List
 from pathlib import Path
+from typing import List, Optional
 from ..db.reader import DBFTable
+from ..utils.strings import normalize_string
+
 
 @dataclass
 class Build:
