@@ -28,6 +28,9 @@ class TableRelationship:
     target_field: str
     relationship_type: RelationType
     description: str = ""
+    # Neue Felder für die Mapping zwischen DBF-Feldnamen und Python-Attributen
+    source_attribute: Optional[str] = None
+    target_attribute: Optional[str] = None
 
     def __hash__(self):
         return hash((self.source_table, self.source_field, self.target_table, self.target_field))
@@ -47,95 +50,100 @@ class RelationshipManager:
     def _define_relationships(self):
         """Define all known relationships between tables."""
         # Employee relationships
-        self.add_relationship("5EMPL", "ID", "5NOTE", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many notes")
-        self.add_relationship("5EMPL", "ID", "5ABSEN", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many absences")
-        self.add_relationship("5EMPL", "ID", "5SPSHI", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many shift details")
-        self.add_relationship("5EMPL", "ID", "5MASHI", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many shifts")
-        self.add_relationship("5EMPL", "ID", "5CYASS", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many cycle assignments")
-        self.add_relationship("5EMPL", "ID", "5GRASG", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee belongs to many groups")
-        self.add_relationship("5EMPL", "ID", "5LEAEN", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many leave entitlements")
-        self.add_relationship("5EMPL", "ID", "5BOOK", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many bookings")
-        self.add_relationship("5EMPL", "ID", "5RESTR", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has many shift restrictions")
-        self.add_relationship("5EMPL", "ID", "5EMACC", "EMPLOYEEID", RelationType.ONE_TO_MANY,
-                              "Employee has access rights")
+        self.add_relationship("5EMPL", "id", "5NOTE", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many notes", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5ABSEN", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many absences", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5SPSHI", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many shift details", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5MASHI", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many shifts", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5CYASS", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many cycle assignments", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5GRASG", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee belongs to many groups", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5LEAEN", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many leave entitlements", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5BOOK", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many bookings", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5RESTR", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has many shift restrictions", "ID", "EMPLOYEEID")
+        self.add_relationship("5EMPL", "id", "5EMACC", "employee_id", RelationType.ONE_TO_MANY,
+                              "Employee has access rights", "ID", "EMPLOYEEID")
 
         # Group relationships
-        self.add_relationship("5GROUP", "ID", "5GRASG", "GROUPID", RelationType.ONE_TO_MANY,
-                              "Group has many employee assignments")
-        self.add_relationship("5GROUP", "ID", "5GRACC", "GROUPID", RelationType.ONE_TO_MANY,
-                              "Group has many access definitions")
-        self.add_relationship("5GROUP", "ID", "5PERIO", "GROUPID", RelationType.ONE_TO_MANY,
-                              "Group has many periods")
-        self.add_relationship("5GROUP", "ID", "5DADEM", "GROUPID", RelationType.ONE_TO_MANY,
-                              "Group has daily demands")
-        self.add_relationship("5GROUP", "ID", "5SHDEM", "GROUPID", RelationType.ONE_TO_MANY,
-                              "Group has shift schedules")
+        self.add_relationship("5GROUP", "id", "5GRASG", "group_id", RelationType.ONE_TO_MANY,
+                              "Group has many employee assignments", "ID", "GROUPID")
+        self.add_relationship("5GROUP", "id", "5GRACC", "group_id", RelationType.ONE_TO_MANY,
+                              "Group has many access definitions", "ID", "GROUPID")
+        self.add_relationship("5GROUP", "id", "5PERIO", "group_id", RelationType.ONE_TO_MANY,
+                              "Group has many periods", "ID", "GROUPID")
+        self.add_relationship("5GROUP", "id", "5DADEM", "group_id", RelationType.ONE_TO_MANY,
+                              "Group has daily demands", "ID", "GROUPID")
+        self.add_relationship("5GROUP", "id", "5SHDEM", "group_id", RelationType.ONE_TO_MANY,
+                              "Group has shift schedules", "ID", "GROUPID")
 
         # Shift relationships
-        self.add_relationship("5SHIFT", "ID", "5SPSHI", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift appears in many shift details")
-        self.add_relationship("5SHIFT", "ID", "5NOTE", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift can have notes")
-        self.add_relationship("5SHIFT", "ID", "5CYENT", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift used in cycle entitlements")
-        self.add_relationship("5SHIFT", "ID", "5RESTR", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift can have restrictions")
-        self.add_relationship("5SHIFT", "ID", "5SHDEM", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift appears in schedules")
-        self.add_relationship("5SHIFT", "ID", "5MASHI", "SHIFTID", RelationType.ONE_TO_MANY,
-                              "Shift assigned to employees")
+        self.add_relationship("5SHIFT", "id", "5SPSHI", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift appears in many shift details", "ID", "SHIFTID")
+        self.add_relationship("5SHIFT", "id", "5NOTE", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift can have notes", "ID", "SHIFTID")
+        self.add_relationship("5SHIFT", "id", "5CYENT", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift used in cycle entitlements", "ID", "SHIFTID")
+        self.add_relationship("5SHIFT", "id", "5RESTR", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift can have restrictions", "ID", "SHIFTID")
+        self.add_relationship("5SHIFT", "id", "5SHDEM", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift appears in schedules", "ID", "SHIFTID")
+        self.add_relationship("5SHIFT", "id", "5MASHI", "shift_id", RelationType.ONE_TO_MANY,
+                              "Shift assigned to employees", "ID", "SHIFTID")
 
         # Leave type relationships
-        self.add_relationship("5LEAVT", "ID", "5LEAEN", "LEAVETYPID", RelationType.ONE_TO_MANY,
-                              "Leave type used in entitlements")
-        self.add_relationship("5LEAVT", "ID", "5ABSEN", "LEAVETYPID", RelationType.ONE_TO_MANY,
-                              "Leave type used in absences")
+        self.add_relationship("5LEAVT", "id", "5LEAEN", "leave_type_id", RelationType.ONE_TO_MANY,
+                              "Leave type used in entitlements", "ID", "LEAVETYPID")
+        self.add_relationship("5LEAVT", "id", "5ABSEN", "leave_type_id", RelationType.ONE_TO_MANY,
+                              "Leave type used in absences", "ID", "LEAVETYPID")
 
         # Cycle relationships
-        self.add_relationship("5CYCLE", "ID", "5CYASS", "CYCLEID", RelationType.ONE_TO_MANY,
-                              "Cycle has many assignments")
-        self.add_relationship("5CYCLE", "ID", "5CYENT", "CYCLEID", RelationType.ONE_TO_MANY,
-                              "Cycle has entitlements")
+        self.add_relationship("5CYCLE", "id", "5CYASS", "cycle_id", RelationType.ONE_TO_MANY,
+                              "Cycle has many assignments", "ID", "CYCLEID")
+        self.add_relationship("5CYCLE", "id", "5CYENT", "cycle_id", RelationType.ONE_TO_MANY,
+                              "Cycle has entitlements", "ID", "CYCLEID")
 
         # Work location relationships
-        self.add_relationship("5WOPL", "ID", "5SPSHI", "WORKPLACID", RelationType.ONE_TO_MANY,
-                              "Work location used in shift details")
-        self.add_relationship("5WOPL", "ID", "5MASHI", "WORKPLACID", RelationType.ONE_TO_MANY,
-                              "Work location used in employee shifts")
-        self.add_relationship("5WOPL", "ID", "5CYENT", "WORKPLACID", RelationType.ONE_TO_MANY,
-                              "Work location in cycle entitlements")
-        self.add_relationship("5WOPL", "ID", "5SHDEM", "WORKPLACID", RelationType.ONE_TO_MANY,
-                              "Work location in shift schedules")
+        self.add_relationship("5WOPL", "id", "5SPSHI", "workplace_id", RelationType.ONE_TO_MANY,
+                              "Work location used in shift details", "ID", "WORKPLACID")
+        self.add_relationship("5WOPL", "id", "5MASHI", "workplace_id", RelationType.ONE_TO_MANY,
+                              "Work location used in employee shifts", "ID", "WORKPLACID")
+        self.add_relationship("5WOPL", "id", "5CYENT", "workplace_id", RelationType.ONE_TO_MANY,
+                              "Work location in cycle entitlements", "ID", "WORKPLACID")
+        self.add_relationship("5WOPL", "id", "5SHDEM", "workplace_id", RelationType.ONE_TO_MANY,
+                              "Work location in shift schedules", "ID", "WORKPLACID")
 
         # User relationships
-        self.add_relationship("5USER", "ID", "5EMACC", "USERID", RelationType.ONE_TO_MANY,
-                              "User has employee access rights")
-        self.add_relationship("5USER", "ID", "5GRACC", "USERID", RelationType.ONE_TO_MANY,
-                              "User has group access rights")
+        self.add_relationship("5USER", "id", "5EMACC", "user_id", RelationType.ONE_TO_MANY,
+                              "User has employee access rights", "ID", "USERID")
+        self.add_relationship("5USER", "id", "5GRACC", "user_id", RelationType.ONE_TO_MANY,
+                              "User has group access rights", "ID", "USERID")
 
         # Holiday relationships
-        self.add_relationship("5HOLID", "ID", "5HOBAN", "HOLIDAY_ID", RelationType.ONE_TO_MANY,
-                              "Holiday has assignments")
+        self.add_relationship("5HOLID", "id", "5HOBAN", "holiday_id", RelationType.ONE_TO_MANY,
+                              "Holiday has assignments", "ID", "HOLIDAY_ID")
 
         # Additional complex relationships
-        self.add_relationship("5CYASS", "ID", "5CYEXC", "CYCLEASSID", RelationType.ONE_TO_MANY,
-                              "Cycle assignment has exceptions")
+        self.add_relationship("5CYASS", "id", "5CYEXC", "cycle_ass_id", RelationType.ONE_TO_MANY,
+                              "Cycle assignment has exceptions", "ID", "CYCLEASSID")
 
     def add_relationship(self, source_table: str, source_field: str,
                          target_table: str, target_field: str,
-                         relationship_type: RelationType, description: str = ""):
+                         relationship_type: RelationType, description: str = "",
+                         source_dbf_field: Optional[str] = None,
+                         target_dbf_field: Optional[str] = None):
         """Add a relationship definition."""
-        rel = TableRelationship(source_table, source_field, target_table,
-                                target_field, relationship_type, description)
+        rel = TableRelationship(
+            source_table, source_field, target_table,
+            target_field, relationship_type, description,
+            source_dbf_field, target_dbf_field
+        )
         self.relationships.add(rel)
 
     def _build_index(self):
@@ -196,7 +204,8 @@ class RelationshipManager:
                     relationship = TableRelationship(
                         target_table, rel.target_field,
                         source_table, rel.source_field,
-                        rel.relationship_type, rel.description
+                        rel.relationship_type, rel.description,
+                        rel.target_attribute, rel.source_attribute
                     )
                     source_data, target_data = target_data, source_data
                     break
@@ -207,6 +216,7 @@ class RelationshipManager:
         # Build index on target data for efficient lookup
         target_index = {***REMOVED***
         for record in target_data:
+            # Use Python attribute name for accessing the field
             key_value = getattr(record, relationship.target_field, None)
             if key_value is not None:
                 if relationship.relationship_type in [RelationType.ONE_TO_MANY, RelationType.MANY_TO_MANY]:
@@ -219,6 +229,7 @@ class RelationshipManager:
         # Resolve references
         matches = []
         for source_record in source_data:
+            # Use Python attribute name for accessing the field
             source_value = getattr(source_record, relationship.source_field, None)
             if source_value is not None and source_value in target_index:
                 if isinstance(target_index[source_value], list):
@@ -243,7 +254,9 @@ class RelationshipManager:
             graph[rel.source_table][key] = {
                 "field": rel.source_field,
                 "type": rel.relationship_type.value,
-                "description": rel.description
+                "description": rel.description,
+                "dbf_source_field": rel.source_attribute,
+                "dbf_target_field": rel.target_attribute
             ***REMOVED***
 
         return graph
@@ -267,11 +280,13 @@ class RelationshipManager:
             # Check if fields exist (sample first record)
             if loaded_tables[rel.source_table]:
                 sample = loaded_tables[rel.source_table][0]
+                # Check Python attribute name (lowercase)
                 if not hasattr(sample, rel.source_field):
                     errors.append(f"Field {rel.source_field***REMOVED*** not found in {rel.source_table***REMOVED***")
 
             if loaded_tables[rel.target_table]:
                 sample = loaded_tables[rel.target_table][0]
+                # Check Python attribute name (lowercase)
                 if not hasattr(sample, rel.target_field):
                     errors.append(f"Field {rel.target_field***REMOVED*** not found in {rel.target_table***REMOVED***")
 
