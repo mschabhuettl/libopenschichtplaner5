@@ -133,6 +133,14 @@ class RelationshipManager:
         self.add_relationship("5CYASS", "id", "5CYEXC", "cycle_ass_id", RelationType.ONE_TO_MANY,
                               "Cycle assignment has exceptions", "ID", "CYCLEASSID")
 
+        # WICHTIG: Korrigierte MASHI Relationships
+        self.add_relationship("5MASHI", "shift_id", "5SHIFT", "id", RelationType.MANY_TO_ONE,
+                              "Employee shift references shift definition", "SHIFTID", "ID")
+        self.add_relationship("5MASHI", "workplace_id", "5WOPL", "id", RelationType.MANY_TO_ONE,
+                              "Employee shift at workplace", "WORKPLACID", "ID")
+        self.add_relationship("5MASHI", "employee_id", "5EMPL", "id", RelationType.MANY_TO_ONE,
+                              "Employee shift belongs to employee", "EMPLOYEEID", "ID")
+
     def add_relationship(self, source_table: str, source_field: str,
                          target_table: str, target_field: str,
                          relationship_type: RelationType, description: str = "",

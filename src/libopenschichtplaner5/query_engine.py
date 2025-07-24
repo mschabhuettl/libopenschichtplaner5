@@ -314,20 +314,20 @@ class QueryEngine:
         if result.records:
             return result.to_dict()[0]
         return None
-    
-    def get_employee_schedule(self, employee_id: int, 
-                            start_date: Optional[date] = None,
-                            end_date: Optional[date] = None) -> List[Dict[str, Any]]:
+
+    def get_employee_schedule(self, employee_id: int,
+                              start_date: Optional[date] = None,
+                              end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         """Get employee's schedule for a date range."""
         query = (self.query()
-                    .select("5SPSHI")
-                    .where_employee(employee_id))
-        
+                 .select("5MASHI")  # Mitarbeiterschichten, nicht SPSHI!
+                 .where_employee(employee_id))
+
         if start_date and end_date:
             query = query.where_date_range("date", start_date, end_date)
-        
+
         query = query.join("5SHIFT").join("5WOPL").order_by("date")
-        
+
         result = query.execute()
         return result.to_dict()
     
