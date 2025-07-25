@@ -60,7 +60,7 @@ class DBFTable:
                     char_decode_errors='replace'
                 )
                 self._encoding = encoding
-                print(f"Successfully loaded {self.path.name***REMOVED*** with encoding: {encoding***REMOVED***")
+                # ENTFERNT: print(f"Successfully loaded {self.path.name***REMOVED*** with encoding: {encoding***REMOVED***")
                 return
             except Exception as e:
                 last_error = e

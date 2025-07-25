@@ -3,6 +3,7 @@
 Query engine for complex cross-table queries in Schichtplaner5 data.
 Provides a fluent interface for building and executing queries across multiple tables.
 """
+import logging
 
 from typing import List, Dict, Any, Optional, Callable, Union, Tuple
 from dataclasses import dataclass, field
@@ -275,18 +276,19 @@ class QueryEngine:
     High-level query engine for Schichtplaner5 data.
     Provides convenience methods for common queries.
     """
-    
-    def __init__(self, dbf_dir: Path):
+
+    def __init__(self, dbf_dir: Path, verbose: bool = False):
+        self.logger = logging.getLogger('libopenschichtplaner5.QueryEngine')
         self.dbf_dir = dbf_dir
         self.loaded_tables = self._load_all_tables()
-        
+
         # Validate relationships
         errors = relationship_manager.validate_relationships(self.loaded_tables)
         if errors:
-            print("Warning: Some relationship validations failed:")
+            self.logger.warning("Some relationship validations failed:")
             for error in errors:
-                print(f"  - {error***REMOVED***")
-    
+                self.logger.warning(f"  - {error***REMOVED***")
+
     def _load_all_tables(self) -> Dict[str, List[Any]]:
         """Load all available tables from DBF directory."""
         tables = {***REMOVED***
@@ -295,8 +297,11 @@ class QueryEngine:
             if dbf_path.exists():
                 try:
                     tables[table_name] = load_table(table_name, dbf_path)
+                    self.logger.debug(f"Loaded {table_name***REMOVED***: {len(tables[table_name])***REMOVED*** records")
                 except Exception as e:
-                    print(f"Error loading {table_name***REMOVED***: {e***REMOVED***")
+                    self.logger.error(f"Error loading {table_name***REMOVED***: {e***REMOVED***")
+
+        self.logger.info(f"Loaded {len(tables)***REMOVED*** tables total")
         return tables
     
     def query(self) -> Query:

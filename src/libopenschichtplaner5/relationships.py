@@ -50,8 +50,6 @@ class RelationshipManager:
     def _define_relationships(self):
         """Define all known relationships between tables."""
         # Employee relationships
-        self.add_relationship("5EMPL", "id", "5NOTE", "employee_id", RelationType.ONE_TO_MANY,
-                              "Employee has many notes", "ID", "EMPLOYEEID")
         self.add_relationship("5EMPL", "id", "5ABSEN", "employee_id", RelationType.ONE_TO_MANY,
                               "Employee has many absences", "ID", "EMPLOYEEID")
         self.add_relationship("5EMPL", "id", "5SPSHI", "employee_id", RelationType.ONE_TO_MANY,
