@@ -38,18 +38,18 @@ class Filter:
     field: str
     operator: FilterOperator
     value: Any
-    
+
     def apply(self, record: Any) -> bool:
         """Apply this filter to a record."""
         field_value = getattr(record, self.field, None)
-        
+
         if self.operator == FilterOperator.IS_NULL:
             return field_value is None
         elif self.operator == FilterOperator.IS_NOT_NULL:
             return field_value is not None
         elif field_value is None:
             return False
-        
+
         if self.operator == FilterOperator.EQUALS:
             return field_value == self.value
         elif self.operator == FilterOperator.NOT_EQUALS:
@@ -72,7 +72,7 @@ class Filter:
             return str(field_value).lower().startswith(str(self.value).lower())
         elif self.operator == FilterOperator.ENDS_WITH:
             return str(field_value).lower().endswith(str(self.value).lower())
-        
+
         return False
 
 
@@ -82,36 +82,36 @@ class QueryResult:
     records: List[Any] = field(default_factory=list)
     count: int = 0
     execution_time: float = 0.0
-    
+
     def to_dict(self) -> List[Dict[str, Any]]:
         """Convert records to dictionary format."""
         return [self._record_to_dict(r) for r in self.records]
-    
+
     def _record_to_dict(self, record: Any) -> Dict[str, Any]:
         """Convert a single record to dictionary."""
         if isinstance(record, dict):
             # Handle enriched records
-            result = {***REMOVED***
+            result = {}
             if "_entity" in record:
                 # Flatten the entity attributes
                 entity = record["_entity"]
                 for attr in dir(entity):
                     if not attr.startswith("_") and not callable(getattr(entity, attr)):
                         result[attr] = getattr(entity, attr)
-                
+
                 # Add relations as nested objects
                 if "_relations" in record:
                     for rel_table, rel_data in record["_relations"].items():
                         if isinstance(rel_data, list):
-                            result[f"{rel_table***REMOVED***_related"] = [
+                            result[f"{rel_table}_related"] = [
                                 self._record_to_dict(r) for r in rel_data
                             ]
                         else:
-                            result[f"{rel_table***REMOVED***_related"] = self._record_to_dict(rel_data)
+                            result[f"{rel_table}_related"] = self._record_to_dict(rel_data)
             return result
         else:
             # Handle simple records
-            result = {***REMOVED***
+            result = {}
             for attr in dir(record):
                 if not attr.startswith("_") and not callable(getattr(record, attr)):
                     result[attr] = getattr(record, attr)
@@ -121,7 +121,7 @@ class QueryResult:
 class Query:
     """
     Fluent query builder for Schichtplaner5 data.
-    
+
     Example usage:
         query = Query(loaded_tables)
         result = (query.select("5EMPL")
@@ -130,7 +130,7 @@ class Query:
                       .join("5ABSEN")
                       .execute())
     """
-    
+
     def __init__(self, loaded_tables: Dict[str, List[Any]]):
         self.loaded_tables = loaded_tables
         self._from_table: Optional[str] = None
@@ -141,73 +141,73 @@ class Query:
         self._limit: Optional[int] = None
         self._offset: int = 0
         self._enrich_depth: int = 0
-    
+
     def select(self, table: str, fields: Optional[List[str]] = None) -> "Query":
         """Select data from a table."""
         if table not in self.loaded_tables:
-            raise ValueError(f"Table {table***REMOVED*** not loaded")
+            raise ValueError(f"Table {table} not loaded")
         self._from_table = table
         self._select_fields = fields
         return self
-    
+
     def where(self, field: str, operator: Union[str, FilterOperator], value: Any = None) -> "Query":
         """Add a filter condition."""
         if isinstance(operator, str):
             operator = FilterOperator(operator)
         self._filters.append(Filter(field, operator, value))
         return self
-    
+
     def where_employee(self, employee_id: int) -> "Query":
         """Convenience method to filter by employee ID."""
         return self.where("employee_id", FilterOperator.EQUALS, employee_id)
-    
+
     def where_date_range(self, field: str, start_date: date, end_date: date) -> "Query":
         """Filter by date range."""
         return (self.where(field, FilterOperator.GREATER_EQUALS, start_date)
-                   .where(field, FilterOperator.LESS_EQUALS, end_date))
-    
+                .where(field, FilterOperator.LESS_EQUALS, end_date))
+
     def join(self, table: str) -> "Query":
         """Join with another table based on defined relationships."""
         if table not in self.loaded_tables:
-            raise ValueError(f"Table {table***REMOVED*** not loaded")
+            raise ValueError(f"Table {table} not loaded")
         self._joins.append(table)
         return self
-    
+
     def with_relations(self, depth: int = 1) -> "Query":
         """Enrich results with related data up to specified depth."""
         self._enrich_depth = depth
         return self
-    
+
     def order_by(self, field: str, ascending: bool = True) -> "Query":
         """Order results by a field."""
         self._order_by = (field, ascending)
         return self
-    
+
     def limit(self, limit: int) -> "Query":
         """Limit number of results."""
         self._limit = limit
         return self
-    
+
     def offset(self, offset: int) -> "Query":
         """Skip first N results."""
         self._offset = offset
         return self
-    
+
     def execute(self) -> QueryResult:
         """Execute the query and return results."""
         import time
         start_time = time.time()
-        
+
         if not self._from_table:
             raise ValueError("No table selected")
-        
+
         # Start with all records from the main table
         results = self.loaded_tables[self._from_table].copy()
-        
+
         # Apply filters
         for filter_cond in self._filters:
             results = [r for r in results if filter_cond.apply(r)]
-        
+
         # Handle joins
         if self._joins:
             enriched_results = []
@@ -221,7 +221,7 @@ class Query:
                 get_entity_with_relations(r, self._from_table, self.loaded_tables, self._enrich_depth)
                 for r in results
             ]
-        
+
         # Apply ordering
         if self._order_by:
             field, ascending = self._order_by
@@ -229,41 +229,41 @@ class Query:
                 key=lambda r: self._get_sort_value(r, field),
                 reverse=not ascending
             )
-        
+
         # Apply offset and limit
         if self._offset:
             results = results[self._offset:]
         if self._limit:
             results = results[:self._limit]
-        
+
         execution_time = time.time() - start_time
-        
+
         return QueryResult(
             records=results,
             count=len(results),
             execution_time=execution_time
         )
-    
+
     def _enrich_with_joins(self, record: Any, table: str) -> Dict[str, Any]:
         """Enrich a record with joined data."""
         result = {
             "_entity": record,
             "_table": table,
-            "_relations": {***REMOVED***
-        ***REMOVED***
-        
+            "_relations": {}
+        }
+
         for join_table in self._joins:
             # Find matching records in join table
             matches = relationship_manager.resolve_reference(
                 [record], table, join_table, self.loaded_tables[join_table]
             )
-            
+
             if matches:
                 # Extract just the target records
                 result["_relations"][join_table] = [match[1] for match in matches]
-        
+
         return result
-    
+
     def _get_sort_value(self, record: Any, field: str) -> Any:
         """Get value for sorting, handling enriched records."""
         if isinstance(record, dict) and "_entity" in record:
@@ -287,35 +287,35 @@ class QueryEngine:
         if errors:
             self.logger.warning("Some relationship validations failed:")
             for error in errors:
-                self.logger.warning(f"  - {error***REMOVED***")
+                self.logger.warning(f"  - {error}")
 
     def _load_all_tables(self) -> Dict[str, List[Any]]:
         """Load all available tables from DBF directory."""
-        tables = {***REMOVED***
+        tables = {}
         for table_name in TABLE_NAMES:
-            dbf_path = self.dbf_dir / f"{table_name***REMOVED***.DBF"
+            dbf_path = self.dbf_dir / f"{table_name}.DBF"
             if dbf_path.exists():
                 try:
                     tables[table_name] = load_table(table_name, dbf_path)
-                    self.logger.debug(f"Loaded {table_name***REMOVED***: {len(tables[table_name])***REMOVED*** records")
+                    self.logger.debug(f"Loaded {table_name}: {len(tables[table_name])} records")
                 except Exception as e:
-                    self.logger.error(f"Error loading {table_name***REMOVED***: {e***REMOVED***")
+                    self.logger.error(f"Error loading {table_name}: {e}")
 
-        self.logger.info(f"Loaded {len(tables)***REMOVED*** tables total")
+        self.logger.info(f"Loaded {len(tables)} tables total")
         return tables
-    
+
     def query(self) -> Query:
         """Create a new query."""
         return Query(self.loaded_tables)
-    
+
     def get_employee_full_profile(self, employee_id: int) -> Dict[str, Any]:
         """Get complete profile for an employee with all related data."""
         result = (self.query()
-                     .select("5EMPL")
-                     .where("id", "=", employee_id)
-                     .with_relations(depth=2)
-                     .execute())
-        
+                  .select("5EMPL")
+                  .where("id", "=", employee_id)
+                  .with_relations(depth=2)
+                  .execute())
+
         if result.records:
             return result.to_dict()[0]
         return None
@@ -335,54 +335,54 @@ class QueryEngine:
 
         result = query.execute()
         return result.to_dict()
-    
+
     def get_group_members(self, group_id: int) -> List[Dict[str, Any]]:
         """Get all employees in a group."""
         # First get group assignments
         assignments = (self.query()
-                          .select("5GRASG")
-                          .where("group_id", "=", group_id)
-                          .execute())
-        
+                       .select("5GRASG")
+                       .where("group_id", "=", group_id)
+                       .execute())
+
         # Then get employee details
         employee_ids = [getattr(a, "employee_id") for a in assignments.records]
-        
+
         if employee_ids:
             result = (self.query()
-                         .select("5EMPL")
-                         .where("id", "in", employee_ids)
-                         .order_by("name")
-                         .execute())
+                      .select("5EMPL")
+                      .where("id", "in", employee_ids)
+                      .order_by("name")
+                      .execute())
             return result.to_dict()
-        
+
         return []
-    
+
     def get_absence_summary(self, year: int) -> Dict[str, Any]:
         """Get absence summary for a year."""
         # This would need date filtering implementation
         absences = self.query().select("5ABSEN").join("5EMPL").join("5LEAVT").execute()
-        
+
         # Group by employee and leave type
-        summary = {***REMOVED***
+        summary = {}
         for record in absences.records:
             # Process and aggregate data
             pass  # Implementation depends on specific requirements
-        
+
         return summary
-    
+
     def search_employees(self, search_term: str) -> List[Dict[str, Any]]:
         """Search employees by name or number."""
         result = (self.query()
-                     .select("5EMPL")
-                     .where("name", "contains", search_term)
-                     .execute())
-        
+                  .select("5EMPL")
+                  .where("name", "contains", search_term)
+                  .execute())
+
         # Also search in firstname
         result2 = (self.query()
-                      .select("5EMPL")
-                      .where("firstname", "contains", search_term)
-                      .execute())
-        
+                   .select("5EMPL")
+                   .where("firstname", "contains", search_term)
+                   .execute())
+
         # Combine and deduplicate results
         all_records = result.records + result2.records
         seen = set()
@@ -391,8 +391,8 @@ class QueryEngine:
             if r.id not in seen:
                 seen.add(r.id)
                 unique_records.append(r)
-        
+
         result.records = unique_records
         result.count = len(unique_records)
-        
+
         return result.to_dict()

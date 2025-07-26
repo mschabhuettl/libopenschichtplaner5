@@ -162,7 +162,7 @@ class RelationshipManager:
             self._index[rel.source_table].append(rel)
 
             # Also index by target table for reverse lookups
-            reverse_key = f"_reverse_{rel.target_table***REMOVED***"
+            reverse_key = f"_reverse_{rel.target_table}"
             if reverse_key not in self._index:
                 self._index[reverse_key] = []
             self._index[reverse_key].append(rel)
@@ -173,7 +173,7 @@ class RelationshipManager:
 
     def get_relationships_to(self, table: str) -> List[TableRelationship]:
         """Get all relationships where the given table is the target."""
-        return self._index.get(f"_reverse_{table***REMOVED***", [])
+        return self._index.get(f"_reverse_{table}", [])
 
     def get_all_related_tables(self, table: str) -> Set[str]:
         """Get all tables that have any relationship with the given table."""
@@ -217,10 +217,10 @@ class RelationshipManager:
                     break
 
         if not relationship:
-            raise ValueError(f"No relationship found between {source_table***REMOVED*** and {target_table***REMOVED***")
+            raise ValueError(f"No relationship found between {source_table} and {target_table}")
 
         # Build index on target data for efficient lookup
-        target_index = {***REMOVED***
+        target_index = {}
         for record in target_data:
             # Use Python attribute name for accessing the field
             key_value = getattr(record, relationship.target_field, None)
@@ -251,19 +251,19 @@ class RelationshipManager:
         Generate a graph representation of all relationships.
         Useful for visualization or documentation.
         """
-        graph = {***REMOVED***
+        graph = {}
         for rel in self.relationships:
             if rel.source_table not in graph:
-                graph[rel.source_table] = {***REMOVED***
+                graph[rel.source_table] = {}
 
-            key = f"{rel.target_table***REMOVED***.{rel.target_field***REMOVED***"
+            key = f"{rel.target_table}.{rel.target_field}"
             graph[rel.source_table][key] = {
                 "field": rel.source_field,
                 "type": rel.relationship_type.value,
                 "description": rel.description,
                 "dbf_source_field": rel.source_attribute,
                 "dbf_target_field": rel.target_attribute
-            ***REMOVED***
+            }
 
         return graph
 
@@ -277,10 +277,10 @@ class RelationshipManager:
         for rel in self.relationships:
             # Check if tables exist
             if rel.source_table not in loaded_tables:
-                errors.append(f"Source table {rel.source_table***REMOVED*** not loaded")
+                errors.append(f"Source table {rel.source_table} not loaded")
                 continue
             if rel.target_table not in loaded_tables:
-                errors.append(f"Target table {rel.target_table***REMOVED*** not loaded")
+                errors.append(f"Target table {rel.target_table} not loaded")
                 continue
 
             # Check if fields exist (sample first record)
@@ -288,13 +288,13 @@ class RelationshipManager:
                 sample = loaded_tables[rel.source_table][0]
                 # Check Python attribute name (lowercase)
                 if not hasattr(sample, rel.source_field):
-                    errors.append(f"Field {rel.source_field***REMOVED*** not found in {rel.source_table***REMOVED***")
+                    errors.append(f"Field {rel.source_field} not found in {rel.source_table}")
 
             if loaded_tables[rel.target_table]:
                 sample = loaded_tables[rel.target_table][0]
                 # Check Python attribute name (lowercase)
                 if not hasattr(sample, rel.target_field):
-                    errors.append(f"Field {rel.target_field***REMOVED*** not found in {rel.target_table***REMOVED***")
+                    errors.append(f"Field {rel.target_field} not found in {rel.target_table}")
 
         return errors
 
@@ -321,8 +321,8 @@ def get_entity_with_relations(entity: Any, entity_table: str,
     result = {
         "_entity": entity,
         "_table": entity_table,
-        "_relations": {***REMOVED***
-    ***REMOVED***
+        "_relations": {}
+    }
 
     if max_depth <= 0:
         return result

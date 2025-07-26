@@ -75,11 +75,11 @@ class Shift:
 
     def get_weekday_time(self, weekday: int) -> str:
         """Gibt die Arbeitszeit für einen Wochentag zurück (0=Mo, 6=So)."""
-        return getattr(self, f"startend{weekday***REMOVED***", "")
+        return getattr(self, f"startend{weekday}", "")
 
     def get_weekday_duration(self, weekday: int) -> float:
         """Gibt die Dauer für einen Wochentag zurück."""
-        return getattr(self, f"duration{weekday***REMOVED***", 0.0)
+        return getattr(self, f"duration{weekday}", 0.0)
 
 
 def load_shifts(dbf_path: str | Path) -> List[Shift]:

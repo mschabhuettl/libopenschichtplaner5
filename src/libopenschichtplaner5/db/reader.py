@@ -24,7 +24,7 @@ CHAR_REPLACEMENTS = {
     "Я": "ß",
     "ќ": "ü",
     "Ђ": "Ä",
-***REMOVED***
+}
 
 
 class DBFTable:
@@ -36,11 +36,11 @@ class DBFTable:
     def __init__(self, path: str | Path, encodings: list = None):
         self.path = Path(path)
         if not self.path.exists():
-            raise FileNotFoundError(f"DBF file not found: {self.path***REMOVED***")
+            raise FileNotFoundError(f"DBF file not found: {self.path}")
 
         self._table = None
         self._encoding = None
-        self._field_info = {***REMOVED***
+        self._field_info = {}
         self.encodings = encodings or ENCODINGS
 
         self._try_encodings()
@@ -60,14 +60,14 @@ class DBFTable:
                     char_decode_errors='replace'
                 )
                 self._encoding = encoding
-                # ENTFERNT: print(f"Successfully loaded {self.path.name***REMOVED*** with encoding: {encoding***REMOVED***")
+                # ENTFERNT: print(f"Successfully loaded {self.path.name} with encoding: {encoding}")
                 return
             except Exception as e:
                 last_error = e
                 continue
 
         if self._table is None:
-            raise ValueError(f"Could not load DBF file with any encoding: {last_error***REMOVED***")
+            raise ValueError(f"Could not load DBF file with any encoding: {last_error}")
 
     def _extract_field_info(self):
         """Extrahiert Feld-Informationen."""
@@ -79,7 +79,7 @@ class DBFTable:
                 'type': field.type,
                 'length': field.length,
                 'decimal_count': field.decimal_count
-            ***REMOVED***
+            }
 
     def _clean_string(self, value: Any) -> str:
         """Bereinigt String-Werte."""
@@ -109,7 +109,7 @@ class DBFTable:
         if value is None:
             return None
 
-        field_info = self._field_info.get(field_name, {***REMOVED***)
+        field_info = self._field_info.get(field_name, {})
         field_type = field_info.get('type', 'C')
 
         # Character-Felder
@@ -156,7 +156,7 @@ class DBFTable:
             return
 
         for record in self._table:
-            cleaned_record = {***REMOVED***
+            cleaned_record = {}
             for field_name, value in record.items():
                 cleaned_record[field_name] = self._convert_value(field_name, value)
             yield cleaned_record

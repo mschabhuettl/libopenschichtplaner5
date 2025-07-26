@@ -17,17 +17,17 @@ def normalize_string(value: object) -> str:
         "Я": "ß",
         "ќ": "ü",
         "Ђ": "Ä",
-    ***REMOVED***
-    
+    }
+
     if value is None:
         return ""
     if isinstance(value, bytes):
         value = value.decode("cp1252", errors="ignore")
-    
+
     value = str(value).replace("\x00", "").strip()
-    
+
     # Ersetze bekannte Problemzeichen
     for old, new in CHAR_REPLACEMENTS.items():
         value = value.replace(old, new)
-    
+
     return value
