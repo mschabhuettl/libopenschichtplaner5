@@ -154,14 +154,19 @@ class ReportGenerator:
         members = self.engine.get_group_members(group_id)
         member_ids = [m["id"] for m in members]
 
-        # Get shifts for the date
-        shifts = (self.engine.query()
-                  .select("5SPSHI")
-                  .where("employee_id", "in", member_ids)
-                  .where("date", "=", target_date)
-                  .join("5SHIFT")
-                  .join("5WOPL")
-                  .execute())
+        # Get shifts for the date - try different table names
+        shifts = None
+        for table_name in ["5SPSHI", "5MASHI"]:
+            if table_name in self.engine.loaded_tables:
+                shifts = (self.engine.query()
+                          .select(table_name)
+                          .where("employee_id", "in", member_ids)
+                          .where("date", "=", target_date)
+                          .join("5SHIFT")
+                          .join("5WOPL")
+                          .execute())
+                if shifts and shifts.records:
+                    break
 
         # Get absences for the date
         absences = (self.engine.query()
@@ -197,29 +202,30 @@ class ReportGenerator:
 
         # Process shifts
         shift_by_type = defaultdict(list)
-        for shift_record in shifts.records:
-            if isinstance(shift_record, dict):
-                shift = shift_record["_entity"]
-                shift_data = shift_record["_relations"].get("5SHIFT", [])
-                workplace_data = shift_record["_relations"].get("5WOPL", [])
+        if shifts and shifts.records:
+            for shift_record in shifts.records:
+                if isinstance(shift_record, dict):
+                    shift = shift_record["_entity"]
+                    shift_data = shift_record["_relations"].get("5SHIFT", [])
+                    workplace_data = shift_record["_relations"].get("5WOPL", [])
 
-                shift_name = shift_data[0].name if shift_data else "Unknown Shift"
-                workplace = workplace_data[0].name if workplace_data else "Unknown Location"
-            else:
-                shift = shift_record
-                shift_name = f"Shift {shift.shift_id}"
-                workplace = f"Location {shift.workplace_id}"
+                    shift_name = shift_data[0].name if shift_data else "Unknown Shift"
+                    workplace = workplace_data[0].name if workplace_data else "Unknown Location"
+                else:
+                    shift = shift_record
+                    shift_name = f"Shift {shift.shift_id}"
+                    workplace = f"Location {shift.workplace_id}"
 
-            if shift.employee_id not in absent_ids:
-                emp_info = next((m for m in members if m["id"] == shift.employee_id), None)
-                if emp_info:
-                    working.append({
-                        "employee": f"{emp_info['name']} {emp_info['firstname']}",
-                        "employee_id": shift.employee_id,
-                        "shift": shift_name,
-                        "workplace": workplace
-                    })
-                    shift_by_type[shift_name].append(emp_info)
+                if shift.employee_id not in absent_ids:
+                    emp_info = next((m for m in members if m["id"] == shift.employee_id), None)
+                    if emp_info:
+                        working.append({
+                            "employee": f"{emp_info['name']} {emp_info['firstname']}",
+                            "employee_id": shift.employee_id,
+                            "shift": shift_name,
+                            "workplace": workplace
+                        })
+                        shift_by_type[shift_name].append(emp_info)
 
         # Calculate staffing summary
         total_members = len(members)
@@ -259,16 +265,59 @@ class ReportGenerator:
         Analyze shift distribution over a period.
         Shows which shifts are used most, distribution by weekday, etc.
         """
-        # Build base query
-        query = self.engine.query().select("5SPSHI").where_date_range("date", start_date, end_date)
+        # Build base query - try different table names
+        shifts = None
+        table_used = None
+        
+        for table_name in ["5SPSHI", "5MASHI"]:
+            if table_name in self.engine.loaded_tables:
+                query = self.engine.query().select(table_name).where_date_range("date", start_date, end_date)
+                
+                # Filter by group if specified
+                if group_id:
+                    members = self.engine.get_group_members(group_id)
+                    member_ids = [m["id"] for m in members]
+                    if member_ids:
+                        query = query.where("employee_id", "in", member_ids)
+                    else:
+                        # No members in group, return empty result
+                        return ReportResult(
+                            title=f"Shift Distribution Report ({start_date} to {end_date})",
+                            data={
+                                "period": {"start": str(start_date), "end": str(end_date)},
+                                "total_shifts": 0,
+                                "shift_types": {},
+                                "unique_employees": 0
+                            },
+                            metadata={
+                                "start_date": str(start_date),
+                                "end_date": str(end_date),
+                                "group_id": group_id
+                            },
+                            generated_at=datetime.now()
+                        )
+                
+                shifts = query.join("5SHIFT").execute()
+                if shifts and shifts.records:
+                    table_used = table_name
+                    break
 
-        # Filter by group if specified
-        if group_id:
-            members = self.engine.get_group_members(group_id)
-            member_ids = [m["id"] for m in members]
-            query = query.where("employee_id", "in", member_ids)
-
-        shifts = query.join("5SHIFT").execute()
+        if not shifts or not shifts.records:
+            return ReportResult(
+                title=f"Shift Distribution Report ({start_date} to {end_date})",
+                data={
+                    "period": {"start": str(start_date), "end": str(end_date)},
+                    "total_shifts": 0,
+                    "shift_types": {},
+                    "unique_employees": 0
+                },
+                metadata={
+                    "start_date": str(start_date),
+                    "end_date": str(end_date),
+                    "group_id": group_id
+                },
+                generated_at=datetime.now()
+            )
 
         # Analyze distribution
         shift_counts = Counter()
@@ -314,7 +363,8 @@ class ReportGenerator:
                 day: dict(shifts) for day, shifts in weekday_distribution.items()
             },
             "most_common_shift": shift_counts.most_common(1)[0] if shift_counts else None,
-            "unique_employees": len(employee_shift_counts)
+            "unique_employees": len(employee_shift_counts),
+            "table_used": table_used
         }
 
         if group_id:
