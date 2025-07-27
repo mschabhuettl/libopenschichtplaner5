@@ -4,7 +4,6 @@ Query engine for complex cross-table queries in Schichtplaner5 data.
 Provides a fluent interface for building and executing queries across multiple tables.
 """
 import logging
-
 from typing import List, Dict, Any, Optional, Callable, Union, Tuple
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +11,8 @@ from datetime import date, datetime
 from enum import Enum
 
 from .relationships import relationship_manager, get_entity_with_relations
-from .registry import load_table, TABLE_NAMES
+from .registry import load_table, TABLE_NAMES, get_table_info
+from .exceptions import DataNotFoundError, InvalidDateRangeError
 
 
 class FilterOperator(Enum):
@@ -114,7 +114,11 @@ class QueryResult:
             result = {}
             for attr in dir(record):
                 if not attr.startswith("_") and not callable(getattr(record, attr)):
-                    result[attr] = getattr(record, attr)
+                    value = getattr(record, attr)
+                    # Convert dates to strings for JSON serialization
+                    if isinstance(value, (date, datetime)):
+                        value = value.isoformat()
+                    result[attr] = value
             return result
 
 
@@ -144,6 +148,9 @@ class Query:
 
     def select(self, table: str, fields: Optional[List[str]] = None) -> "Query":
         """Select data from a table."""
+        # Handle table name aliases
+        table = self._normalize_table_name(table)
+        
         if table not in self.loaded_tables:
             raise ValueError(f"Table {table} not loaded")
         self._from_table = table
@@ -163,11 +170,16 @@ class Query:
 
     def where_date_range(self, field: str, start_date: date, end_date: date) -> "Query":
         """Filter by date range."""
+        if start_date > end_date:
+            raise InvalidDateRangeError(f"Start date {start_date} is after end date {end_date}")
         return (self.where(field, FilterOperator.GREATER_EQUALS, start_date)
                 .where(field, FilterOperator.LESS_EQUALS, end_date))
 
     def join(self, table: str) -> "Query":
         """Join with another table based on defined relationships."""
+        # Handle table name aliases
+        table = self._normalize_table_name(table)
+        
         if table not in self.loaded_tables:
             raise ValueError(f"Table {table} not loaded")
         self._joins.append(table)
@@ -244,6 +256,15 @@ class Query:
             execution_time=execution_time
         )
 
+    def _normalize_table_name(self, table: str) -> str:
+        """Normalize table name to handle aliases."""
+        # Handle common aliases
+        if table == "5MASHI":
+            # Check if 5MASHI exists, otherwise use 5SPSHI
+            if "5MASHI" not in self.loaded_tables and "5SPSHI" in self.loaded_tables:
+                return "5SPSHI"
+        return table
+
     def _enrich_with_joins(self, record: Any, table: str) -> Dict[str, Any]:
         """Enrich a record with joined data."""
         result = {
@@ -292,14 +313,28 @@ class QueryEngine:
     def _load_all_tables(self) -> Dict[str, List[Any]]:
         """Load all available tables from DBF directory."""
         tables = {}
+        
+        # Try different file extensions
+        extensions = [".DBF", ".dbf", ".txt", ".TXT"]
+        
         for table_name in TABLE_NAMES:
-            dbf_path = self.dbf_dir / f"{table_name}.DBF"
-            if dbf_path.exists():
-                try:
-                    tables[table_name] = load_table(table_name, dbf_path)
-                    self.logger.debug(f"Loaded {table_name}: {len(tables[table_name])} records")
-                except Exception as e:
-                    self.logger.error(f"Error loading {table_name}: {e}")
+            loaded = False
+            for ext in extensions:
+                dbf_path = self.dbf_dir / f"{table_name}{ext}"
+                if dbf_path.exists():
+                    try:
+                        tables[table_name] = load_table(table_name, dbf_path)
+                        self.logger.debug(f"Loaded {table_name}: {len(tables[table_name])} records")
+                        loaded = True
+                        break
+                    except Exception as e:
+                        self.logger.error(f"Error loading {table_name}: {e}")
+            
+            if not loaded:
+                # Check if it's optional
+                info = get_table_info(table_name)
+                if info and not info.optional:
+                    self.logger.warning(f"Required table {table_name} not found")
 
         self.logger.info(f"Loaded {len(tables)} tables total")
         return tables
@@ -318,23 +353,31 @@ class QueryEngine:
 
         if result.records:
             return result.to_dict()[0]
-        return None
+        raise DataNotFoundError(f"Employee with ID {employee_id} not found")
 
     def get_employee_schedule(self, employee_id: int,
                               start_date: Optional[date] = None,
                               end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         """Get employee's schedule for a date range."""
-        query = (self.query()
-                 .select("5MASHI")  # Mitarbeiterschichten, nicht SPSHI!
-                 .where_employee(employee_id))
+        # Try different table names for employee shifts
+        shift_tables = ["5SPSHI", "5MASHI"]
+        
+        for table_name in shift_tables:
+            if table_name in self.loaded_tables:
+                query = (self.query()
+                         .select(table_name)
+                         .where_employee(employee_id))
 
-        if start_date and end_date:
-            query = query.where_date_range("date", start_date, end_date)
+                if start_date and end_date:
+                    query = query.where_date_range("date", start_date, end_date)
 
-        query = query.join("5SHIFT").join("5WOPL").order_by("date")
+                query = query.join("5SHIFT").join("5WOPL").order_by("date")
 
-        result = query.execute()
-        return result.to_dict()
+                result = query.execute()
+                if result.records:
+                    return result.to_dict()
+                
+        return []
 
     def get_group_members(self, group_id: int) -> List[Dict[str, Any]]:
         """Get all employees in a group."""
@@ -359,40 +402,62 @@ class QueryEngine:
 
     def get_absence_summary(self, year: int) -> Dict[str, Any]:
         """Get absence summary for a year."""
-        # This would need date filtering implementation
-        absences = self.query().select("5ABSEN").join("5EMPL").join("5LEAVT").execute()
+        start_date = date(year, 1, 1)
+        end_date = date(year, 12, 31)
+        
+        absences = (self.query()
+                   .select("5ABSEN")
+                   .where_date_range("date", start_date, end_date)
+                   .join("5EMPL")
+                   .join("5LEAVT")
+                   .execute())
 
         # Group by employee and leave type
-        summary = {}
+        summary = {
+            "year": year,
+            "total_absences": len(absences.records),
+            "by_employee": {},
+            "by_leave_type": {}
+        }
+        
         for record in absences.records:
-            # Process and aggregate data
-            pass  # Implementation depends on specific requirements
+            if isinstance(record, dict):
+                absence = record["_entity"]
+                employee_data = record["_relations"].get("5EMPL", [])
+                leave_type_data = record["_relations"].get("5LEAVT", [])
+                
+                emp_name = f"{employee_data[0].name} {employee_data[0].firstname}" if employee_data else f"Employee {absence.employee_id}"
+                leave_type = leave_type_data[0].name if leave_type_data else f"Type {absence.leave_type_id}"
+                
+                # Count by employee
+                if emp_name not in summary["by_employee"]:
+                    summary["by_employee"][emp_name] = 0
+                summary["by_employee"][emp_name] += 1
+                
+                # Count by leave type
+                if leave_type not in summary["by_leave_type"]:
+                    summary["by_leave_type"][leave_type] = 0
+                summary["by_leave_type"][leave_type] += 1
 
         return summary
 
     def search_employees(self, search_term: str) -> List[Dict[str, Any]]:
         """Search employees by name or number."""
-        result = (self.query()
-                  .select("5EMPL")
-                  .where("name", "contains", search_term)
-                  .execute())
-
-        # Also search in firstname
-        result2 = (self.query()
-                   .select("5EMPL")
-                   .where("firstname", "contains", search_term)
-                   .execute())
-
-        # Combine and deduplicate results
-        all_records = result.records + result2.records
-        seen = set()
-        unique_records = []
-        for r in all_records:
-            if r.id not in seen:
-                seen.add(r.id)
-                unique_records.append(r)
-
-        result.records = unique_records
-        result.count = len(unique_records)
-
+        search_term = search_term.lower()
+        
+        # Search in multiple fields
+        all_employees = self.query().select("5EMPL").execute()
+        
+        matching = []
+        for emp in all_employees.records:
+            # Check various fields
+            if (search_term in str(emp.name).lower() or
+                search_term in str(emp.firstname).lower() or
+                search_term in str(emp.number).lower() or
+                search_term in str(emp.position).lower() or
+                search_term in str(emp.email).lower()):
+                matching.append(emp)
+        
+        # Convert to dict and remove duplicates
+        result = QueryResult(records=matching, count=len(matching))
         return result.to_dict()
