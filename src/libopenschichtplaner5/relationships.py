@@ -1,14 +1,16 @@
-# src/libopenschichtplaner5/relationships_improved.py
+# libopenschichtplaner5/src/libopenschichtplaner5/relationships.py
 """
-Improved relationship management with schema-based definitions and lazy loading.
+Relationship management for Schichtplaner5 tables.
+Defines how tables are related to each other and provides utilities for resolving references.
 """
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Any, Optional, Set, Union, Iterator
-from pathlib import Path
 from enum import Enum
-import json
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RelationType(Enum):
@@ -20,315 +22,346 @@ class RelationType(Enum):
 
 
 @dataclass
-class FieldMapping:
-    """Maps DBF field names to Python attribute names."""
-    dbf_field: str
-    python_attribute: str
-    data_type: Optional[str] = None
-    is_key: bool = False
+class TableRelationship:
+    """Defines a relationship between two tables."""
+    source_table: str
+    source_field: str
+    target_table: str
+    target_field: str
+    relationship_type: RelationType
+    description: str = ""
+    
+    def __hash__(self):
+        return hash((self.source_table, self.source_field, 
+                    self.target_table, self.target_field))
 
 
 @dataclass
-class RelationshipSchema:
-    """Schema definition for a relationship."""
-    source_table: str
-    target_table: str
-    relationship_type: RelationType
-    source_field: FieldMapping
-    target_field: FieldMapping
-    description: str = ""
-    lazy_load: bool = True
-    cascade_delete: bool = False
-    
-    def __hash__(self):
-        return hash((self.source_table, self.source_field.python_attribute, 
-                    self.target_table, self.target_field.python_attribute))
-
-
-class RelationshipIndex:
-    """Optimized index for fast relationship lookups."""
-    
-    def __init__(self):
-        self._forward_index: Dict[str, Dict[Any, List[Any]]] = defaultdict(lambda: defaultdict(list))
-        self._reverse_index: Dict[str, Dict[Any, List[Any]]] = defaultdict(lambda: defaultdict(list))
-        self._one_to_one_index: Dict[str, Dict[Any, Any]] = defaultdict(dict)
-    
-    def build_index(self, table_name: str, records: List[Any], key_field: str, 
-                   relationship_type: RelationType):
-        """Build index for a table."""
-        if relationship_type == RelationType.ONE_TO_ONE:
-            index = self._one_to_one_index[table_name]
-            for record in records:
-                key_value = getattr(record, key_field, None)
-                if key_value is not None:
-                    index[key_value] = record
-        else:
-            # One-to-many or many-to-many
-            index = self._forward_index[table_name]
-            for record in records:
-                key_value = getattr(record, key_field, None)
-                if key_value is not None:
-                    index[key_value].append(record)
-    
-    def lookup(self, table_name: str, key_value: Any, 
-              relationship_type: RelationType) -> Union[Any, List[Any], None]:
-        """Fast lookup of related records."""
-        if relationship_type == RelationType.ONE_TO_ONE:
-            return self._one_to_one_index[table_name].get(key_value)
-        else:
-            return self._forward_index[table_name].get(key_value, [])
-
-
-@dataclass 
-class RelationshipResolver:
-    """Resolves relationships with caching and lazy loading."""
-    schemas: Set[RelationshipSchema] = field(default_factory=set)
-    _schema_index: Dict[str, List[RelationshipSchema]] = field(default_factory=dict)
-    _data_index: RelationshipIndex = field(default_factory=RelationshipIndex)
-    _cache: Dict[Tuple, Any] = field(default_factory=dict)
+class RelationshipManager:
+    """Manages all table relationships."""
+    relationships: Set[TableRelationship] = field(default_factory=set)
+    _index_by_source: Dict[str, List[TableRelationship]] = field(default_factory=lambda: defaultdict(list))
+    _index_by_target: Dict[str, List[TableRelationship]] = field(default_factory=lambda: defaultdict(list))
+    _data_cache: Dict[Tuple[str, Any, str], Any] = field(default_factory=dict)
     
     def __post_init__(self):
-        self._build_schema_index()
+        self._rebuild_indexes()
     
-    def add_schema(self, schema: RelationshipSchema):
-        """Add a relationship schema."""
-        self.schemas.add(schema)
-        self._build_schema_index()
+    def add_relationship(self, relationship: TableRelationship):
+        """Add a relationship to the manager."""
+        self.relationships.add(relationship)
+        self._index_by_source[relationship.source_table].append(relationship)
+        self._index_by_target[relationship.target_table].append(relationship)
     
-    def _build_schema_index(self):
-        """Build index for quick schema lookup."""
-        self._schema_index.clear()
-        for schema in self.schemas:
-            # Index by source table
-            if schema.source_table not in self._schema_index:
-                self._schema_index[schema.source_table] = []
-            self._schema_index[schema.source_table].append(schema)
+    def _rebuild_indexes(self):
+        """Rebuild internal indexes."""
+        self._index_by_source.clear()
+        self._index_by_target.clear()
+        
+        for rel in self.relationships:
+            self._index_by_source[rel.source_table].append(rel)
+            self._index_by_target[rel.target_table].append(rel)
     
-    def build_data_indexes(self, loaded_tables: Dict[str, List[Any]]):
-        """Build optimized indexes for all loaded data."""
-        for schema in self.schemas:
-            if schema.target_table in loaded_tables:
-                self._data_index.build_index(
-                    schema.target_table,
-                    loaded_tables[schema.target_table],
-                    schema.target_field.python_attribute,
-                    schema.relationship_type
-                )
+    def get_relationships_from(self, table: str) -> List[TableRelationship]:
+        """Get all relationships where the table is the source."""
+        return self._index_by_source.get(table, [])
     
-    def resolve_relationship(self, source_record: Any, source_table: str, 
-                           target_table: str, use_cache: bool = True) -> Any:
-        """Resolve a specific relationship for a record."""
-        # Find matching schema
-        schema = self._find_schema(source_table, target_table)
-        if not schema:
-            return None
-        
-        # Check cache
-        cache_key = (id(source_record), source_table, target_table)
-        if use_cache and cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        # Get source value
-        source_value = getattr(source_record, schema.source_field.python_attribute, None)
-        if source_value is None:
-            return None
-        
-        # Lookup related records
-        result = self._data_index.lookup(
-            target_table, 
-            source_value, 
-            schema.relationship_type
-        )
-        
-        # Cache result
-        if use_cache:
-            self._cache[cache_key] = result
-        
-        return result
+    def get_relationships_to(self, table: str) -> List[TableRelationship]:
+        """Get all relationships where the table is the target."""
+        return self._index_by_target.get(table, [])
     
-    def resolve_all_relationships(self, source_record: Any, source_table: str,
-                                max_depth: int = 1, current_depth: int = 0) -> Dict[str, Any]:
-        """Resolve all relationships for a record recursively."""
-        if current_depth >= max_depth:
-            return {}
-        
-        relationships = {}
-        schemas = self._schema_index.get(source_table, [])
-        
-        for schema in schemas:
-            if schema.lazy_load and current_depth > 0:
-                # Skip lazy-loaded relationships in deep recursion
-                continue
-            
-            related = self.resolve_relationship(source_record, source_table, schema.target_table)
-            if related is not None:
-                relationships[schema.target_table] = related
-                
-                # Recursive resolution for related records
-                if current_depth < max_depth - 1:
-                    if isinstance(related, list):
-                        for rel_record in related:
-                            sub_relations = self.resolve_all_relationships(
-                                rel_record, schema.target_table, 
-                                max_depth, current_depth + 1
-                            )
-                            if sub_relations:
-                                if not hasattr(rel_record, '_relations'):
-                                    rel_record._relations = {}
-                                rel_record._relations.update(sub_relations)
-                    else:
-                        sub_relations = self.resolve_all_relationships(
-                            related, schema.target_table,
-                            max_depth, current_depth + 1
-                        )
-                        if sub_relations:
-                            if not hasattr(related, '_relations'):
-                                related._relations = {}
-                            related._relations.update(sub_relations)
-        
-        return relationships
-    
-    def _find_schema(self, source_table: str, target_table: str) -> Optional[RelationshipSchema]:
-        """Find schema for a specific relationship."""
-        schemas = self._schema_index.get(source_table, [])
-        for schema in schemas:
-            if schema.target_table == target_table:
-                return schema
-        return None
-    
-    def get_related_tables(self, table_name: str) -> Set[str]:
-        """Get all tables related to a specific table."""
+    def get_all_related_tables(self, table: str) -> Set[str]:
+        """Get all tables related to the given table."""
         related = set()
         
         # Tables this table points to
-        for schema in self._schema_index.get(table_name, []):
-            related.add(schema.target_table)
+        for rel in self.get_relationships_from(table):
+            related.add(rel.target_table)
         
         # Tables that point to this table
-        for schemas in self._schema_index.values():
-            for schema in schemas:
-                if schema.target_table == table_name:
-                    related.add(schema.source_table)
+        for rel in self.get_relationships_to(table):
+            related.add(rel.source_table)
         
         return related
     
-    def clear_cache(self):
-        """Clear the relationship cache."""
-        self._cache.clear()
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get relationship resolver statistics."""
-        return {
-            "schemas_count": len(self.schemas),
-            "cached_relationships": len(self._cache),
-            "indexed_tables": len(self._data_index._forward_index),
-            "memory_usage_estimate": len(self._cache) * 64  # Rough estimate
-        }
-
-
-def load_relationships_from_json(json_path: Path) -> RelationshipResolver:
-    """Load relationship definitions from JSON file."""
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    
-    resolver = RelationshipResolver()
-    
-    for rel_data in data.get('relationships', []):
-        source_field = FieldMapping(
-            dbf_field=rel_data['source_field']['dbf_field'],
-            python_attribute=rel_data['source_field']['python_attribute'],
-            data_type=rel_data['source_field'].get('data_type'),
-            is_key=rel_data['source_field'].get('is_key', False)
-        )
+    def resolve_reference(self, source_entities: List[Any], source_table: str,
+                         target_table: str, target_entities: List[Any]) -> List[Tuple[Any, Any]]:
+        """
+        Resolve references between entities.
+        Returns list of (source_entity, target_entity) tuples.
+        """
+        # Find the relationship
+        relationship = None
+        for rel in self.get_relationships_from(source_table):
+            if rel.target_table == target_table:
+                relationship = rel
+                break
         
-        target_field = FieldMapping(
-            dbf_field=rel_data['target_field']['dbf_field'],
-            python_attribute=rel_data['target_field']['python_attribute'],
-            data_type=rel_data['target_field'].get('data_type'),
-            is_key=rel_data['target_field'].get('is_key', False)
-        )
+        if not relationship:
+            # Try reverse relationship
+            for rel in self.get_relationships_to(source_table):
+                if rel.source_table == target_table:
+                    # Swap the relationship direction
+                    relationship = TableRelationship(
+                        source_table=target_table,
+                        source_field=rel.target_field,
+                        target_table=source_table,
+                        target_field=rel.source_field,
+                        relationship_type=self._reverse_relationship_type(rel.relationship_type)
+                    )
+                    # Swap entities
+                    source_entities, target_entities = target_entities, source_entities
+                    source_table, target_table = target_table, source_table
+                    break
         
-        schema = RelationshipSchema(
-            source_table=rel_data['source_table'],
-            target_table=rel_data['target_table'],
-            relationship_type=RelationType(rel_data['relationship_type']),
-            source_field=source_field,
-            target_field=target_field,
-            description=rel_data.get('description', ''),
-            lazy_load=rel_data.get('lazy_load', True),
-            cascade_delete=rel_data.get('cascade_delete', False)
-        )
+        if not relationship:
+            logger.warning(f"No relationship found between {source_table} and {target_table}")
+            return []
         
-        resolver.add_schema(schema)
+        # Build index for fast lookup
+        target_index = defaultdict(list)
+        for target in target_entities:
+            key_value = getattr(target, relationship.target_field, None)
+            if key_value is not None:
+                target_index[key_value].append(target)
+        
+        # Resolve references
+        matches = []
+        for source in source_entities:
+            source_value = getattr(source, relationship.source_field, None)
+            if source_value is not None and source_value in target_index:
+                for target in target_index[source_value]:
+                    matches.append((source, target))
+        
+        return matches
     
-    return resolver
+    def _reverse_relationship_type(self, rel_type: RelationType) -> RelationType:
+        """Get the reverse of a relationship type."""
+        if rel_type == RelationType.ONE_TO_MANY:
+            return RelationType.MANY_TO_ONE
+        elif rel_type == RelationType.MANY_TO_ONE:
+            return RelationType.ONE_TO_MANY
+        else:
+            return rel_type
+    
+    def get_relationship_graph(self) -> Dict[str, Dict[str, Dict[str, str]]]:
+        """Get a graph representation of all relationships."""
+        graph = defaultdict(lambda: defaultdict(dict))
+        
+        for rel in self.relationships:
+            graph[rel.source_table][rel.target_table] = {
+                "field": f"{rel.source_field} -> {rel.target_field}",
+                "type": rel.relationship_type.value,
+                "description": rel.description
+            }
+        
+        return dict(graph)
+    
+    def validate_relationships(self, loaded_tables: Dict[str, List[Any]]) -> List[str]:
+        """Validate that all defined relationships are valid."""
+        errors = []
+        
+        for rel in self.relationships:
+            # Check if tables exist
+            if rel.source_table not in loaded_tables:
+                errors.append(f"Source table {rel.source_table} not loaded")
+                continue
+            if rel.target_table not in loaded_tables:
+                errors.append(f"Target table {rel.target_table} not loaded")
+                continue
+            
+            # Check if fields exist (sample first record)
+            if loaded_tables[rel.source_table]:
+                sample = loaded_tables[rel.source_table][0]
+                if not hasattr(sample, rel.source_field):
+                    errors.append(f"Field {rel.source_field} not found in {rel.source_table}")
+            
+            if loaded_tables[rel.target_table]:
+                sample = loaded_tables[rel.target_table][0]
+                if not hasattr(sample, rel.target_field):
+                    errors.append(f"Field {rel.target_field} not found in {rel.target_table}")
+        
+        return errors
 
 
-def create_default_resolver() -> RelationshipResolver:
-    """Create resolver with default Schichtplaner5 relationships."""
-    resolver = RelationshipResolver()
+# Global relationship manager instance
+relationship_manager = RelationshipManager()
+
+
+# Define all known relationships
+def _define_relationships():
+    """Define all standard Schichtplaner5 relationships."""
     
     # Employee relationships
-    resolver.add_schema(RelationshipSchema(
-        "5EMPL", "5ABSEN", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("EMPLOYEEID", "employee_id"),
-        "Employee has many absences"
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5ABSEN", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has many absences"
     ))
     
-    resolver.add_schema(RelationshipSchema(
-        "5EMPL", "5MASHI", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("EMPLOYEEID", "employee_id"),
-        "Employee has many shifts"
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5SPSHI", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has many shift details"
     ))
     
-    resolver.add_schema(RelationshipSchema(
-        "5EMPL", "5SPSHI", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("EMPLOYEEID", "employee_id"),
-        "Employee has many shift details"
+    # Note: 5MASHI is sometimes used instead of 5SPSHI for employee shifts
+    # We define both relationships to handle different versions
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5MASHI", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has many shift assignments"
     ))
     
-    # Shift relationships  
-    resolver.add_schema(RelationshipSchema(
-        "5SHIFT", "5MASHI", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("SHIFTID", "shift_id"),
-        "Shift used in employee shifts"
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5NOTE", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has many notes"
     ))
     
-    resolver.add_schema(RelationshipSchema(
-        "5SHIFT", "5SPSHI", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("SHIFTID", "shift_id"),
-        "Shift used in shift details"
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5GRASG", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee belongs to groups"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5LEAEN", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has leave entitlements"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5CYASS", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has cycle assignments"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5EMPL", "id", "5BOOK", "employee_id",
+        RelationType.ONE_TO_MANY, "Employee has bookings"
     ))
     
     # Group relationships
-    resolver.add_schema(RelationshipSchema(
-        "5GROUP", "5GRASG", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("GROUPID", "group_id"),
-        "Group has many assignments"
+    relationship_manager.add_relationship(TableRelationship(
+        "5GROUP", "id", "5GRASG", "group_id",
+        RelationType.ONE_TO_MANY, "Group has many assignments"
     ))
     
-    resolver.add_schema(RelationshipSchema(
-        "5EMPL", "5GRASG", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("EMPLOYEEID", "employee_id"),
-        "Employee belongs to groups"
+    relationship_manager.add_relationship(TableRelationship(
+        "5GROUP", "superid", "5GROUP", "id",
+        RelationType.MANY_TO_ONE, "Group has parent group"
     ))
     
-    # Leave type relationships
-    resolver.add_schema(RelationshipSchema(
-        "5LEAVT", "5ABSEN", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("LEAVETYPID", "leave_type_id"),
-        "Leave type used in absences"
+    # Shift relationships
+    relationship_manager.add_relationship(TableRelationship(
+        "5SHIFT", "id", "5SPSHI", "shift_id",
+        RelationType.ONE_TO_MANY, "Shift used in shift details"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5SHIFT", "id", "5MASHI", "shift_id",
+        RelationType.ONE_TO_MANY, "Shift used in assignments"
     ))
     
     # Workplace relationships
-    resolver.add_schema(RelationshipSchema(
-        "5WOPL", "5MASHI", RelationType.ONE_TO_MANY,
-        FieldMapping("ID", "id"), FieldMapping("WORKPLACID", "workplace_id"),
-        "Workplace used in shifts"
+    relationship_manager.add_relationship(TableRelationship(
+        "5WOPL", "id", "5SPSHI", "workplace_id",
+        RelationType.ONE_TO_MANY, "Workplace used in shift details"
     ))
     
-    return resolver
+    relationship_manager.add_relationship(TableRelationship(
+        "5WOPL", "id", "5MASHI", "workplace_id",
+        RelationType.ONE_TO_MANY, "Workplace used in assignments"
+    ))
+    
+    # Leave type relationships
+    relationship_manager.add_relationship(TableRelationship(
+        "5LEAVT", "id", "5ABSEN", "leave_type_id",
+        RelationType.ONE_TO_MANY, "Leave type used in absences"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5LEAVT", "id", "5LEAEN", "leave_type_id",
+        RelationType.ONE_TO_MANY, "Leave type used in entitlements"
+    ))
+    
+    # Cycle relationships
+    relationship_manager.add_relationship(TableRelationship(
+        "5CYCLE", "id", "5CYASS", "cycle_id",
+        RelationType.ONE_TO_MANY, "Cycle has assignments"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5CYCLE", "id", "5CYENT", "cycle_id",
+        RelationType.ONE_TO_MANY, "Cycle has entitlements"
+    ))
+    
+    # User relationships
+    relationship_manager.add_relationship(TableRelationship(
+        "5USER", "id", "5EMACC", "user_id",
+        RelationType.ONE_TO_MANY, "User has employee access"
+    ))
+    
+    relationship_manager.add_relationship(TableRelationship(
+        "5USER", "id", "5GRACC", "user_id",
+        RelationType.ONE_TO_MANY, "User has group access"
+    ))
+    
+    # Holiday relationships
+    relationship_manager.add_relationship(TableRelationship(
+        "5HOLID", "id", "5HOASS", "holiday_id",
+        RelationType.ONE_TO_MANY, "Holiday has assignments"
+    ))
 
 
-# Global instance for backward compatibility
-default_resolver = create_default_resolver()
+# Initialize relationships
+_define_relationships()
+
+
+def get_entity_with_relations(entity: Any, table_name: str, 
+                            loaded_tables: Dict[str, List[Any]],
+                            max_depth: int = 1,
+                            current_depth: int = 0) -> Dict[str, Any]:
+    """
+    Enrich an entity with its related data.
+    Returns a dictionary with the entity and its relations.
+    """
+    if current_depth >= max_depth:
+        return {"_entity": entity, "_table": table_name, "_relations": {}}
+    
+    result = {
+        "_entity": entity,
+        "_table": table_name,
+        "_relations": {}
+    }
+    
+    # Get all relationships from this table
+    relationships = relationship_manager.get_relationships_from(table_name)
+    
+    for rel in relationships:
+        if rel.target_table not in loaded_tables:
+            continue
+        
+        # Find related entities
+        source_value = getattr(entity, rel.source_field, None)
+        if source_value is None:
+            continue
+        
+        related_entities = []
+        for target_entity in loaded_tables[rel.target_table]:
+            target_value = getattr(target_entity, rel.target_field, None)
+            if target_value == source_value:
+                if rel.relationship_type == RelationType.ONE_TO_ONE:
+                    result["_relations"][rel.target_table] = target_entity
+                    break
+                else:
+                    related_entities.append(target_entity)
+        
+        if related_entities and rel.relationship_type != RelationType.ONE_TO_ONE:
+            result["_relations"][rel.target_table] = related_entities
+            
+            # Recursive enrichment
+            if current_depth < max_depth - 1:
+                for i, related in enumerate(related_entities):
+                    enriched = get_entity_with_relations(
+                        related, rel.target_table, loaded_tables,
+                        max_depth, current_depth + 1
+                    )
+                    if enriched["_relations"]:
+                        related_entities[i] = enriched
+    
+    return result
