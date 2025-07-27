@@ -1,236 +1,268 @@
-# libopenschichtplaner5/src/libopenschichtplaner5/registry_improved.py
+# libopenschichtplaner5/src/libopenschichtplaner5/registry.py
 """
-Improved registry implementation with plugin architecture and dependency resolution.
+Central registry for all Schichtplaner5 tables.
+Manages table metadata and model loading.
 """
+
 from pathlib import Path
-from typing import Callable, Dict, List, Union, Any, Optional, Type, Set
+from typing import Dict, List, Any, Optional, Callable, Type
+from dataclasses import dataclass
 import logging
-from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
-from importlib import import_module
-import json
 
-from .utils.logging_config import get_logger
-from .exceptions import DBFLoadError
-
-logger = get_logger()
+logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TableDefinition:
-    """Enhanced table definition with dependencies and metadata."""
+class TableMetadata:
+    """Metadata for a Schichtplaner5 table."""
     name: str
-    model_class_path: str  # e.g., "libopenschichtplaner5.models.employee.Employee"
-    loader_func_path: str  # e.g., "libopenschichtplaner5.models.employee.load_employees"
-    description: str = ""
-    primary_key: str = "id"
-    required_fields: List[str] = field(default_factory=list)
+    description: str
+    model_class: Optional[Type] = None
+    loader_func: Optional[Callable] = None
+    required_fields: List[str] = None
     optional: bool = False
-    dependencies: Set[str] = field(default_factory=set)  # Other tables this depends on
-    version: str = "1.0"
     
     def __post_init__(self):
-        if not self.required_fields:
-            self.required_fields = [self.primary_key]
+        if self.required_fields is None:
+            self.required_fields = ["id"]
 
 
-class TablePlugin(ABC):
-    """Abstract base class for table plugins."""
-    
-    @property
-    @abstractmethod
-    def table_name(self) -> str:
-        """Return the table name."""
-        pass
-    
-    @property
-    @abstractmethod
-    def model_class(self) -> Type:
-        """Return the model class."""
-        pass
-    
-    @abstractmethod
-    def load_data(self, path: Path) -> List[Any]:
-        """Load data from DBF file."""
-        pass
-    
-    @property
-    def dependencies(self) -> Set[str]:
-        """Return table dependencies."""
-        return set()
-    
-    @property
-    def is_optional(self) -> bool:
-        """Whether this table is optional."""
-        return False
+# Central registry of all tables
+TABLE_REGISTRY: Dict[str, TableMetadata] = {}
 
 
-class PluginRegistry:
-    """Registry for table plugins with dependency resolution."""
+def register_table(name: str, description: str, optional: bool = False):
+    """Register a table in the registry."""
+    TABLE_REGISTRY[name] = TableMetadata(
+        name=name,
+        description=description,
+        optional=optional
+    )
+
+
+# Register all known tables
+register_table("5EMPL", "Employee master data")
+register_table("5GROUP", "Groups/Departments")
+register_table("5SHIFT", "Shift definitions")
+register_table("5WOPL", "Work locations/Workplaces")
+register_table("5ABSEN", "Absences")
+register_table("5LEAVT", "Leave types")
+register_table("5SPSHI", "Employee shift details")
+register_table("5MASHI", "Employee shift assignments")  # Legacy name, maps to 5SPSHI
+register_table("5MASPD", "Employee shift plan data", optional=True)
+register_table("5NOTE", "Notes")
+register_table("5GRASG", "Group assignments")
+register_table("5LEAEN", "Leave entitlements")
+register_table("5CYASS", "Cycle assignments")
+register_table("5CYCLE", "Cycles")
+register_table("5HOLID", "Holidays")
+register_table("5USER", "Users")
+register_table("5BOOK", "Bookings/Overtime")
+register_table("5HOASS", "Holiday assignments")
+register_table("5CYENT", "Cycle entitlements")
+register_table("5CYEXC", "Cycle exceptions", optional=True)
+register_table("5SPMED", "Shift demands", optional=True)
+register_table("5SHRES", "Shift restrictions", optional=True)
+register_table("5SCHED", "Shift schedules", optional=True)
+register_table("5SPDEM", "Shift plan demands", optional=True)
+register_table("5USSET", "User settings", optional=True)
+register_table("5PERIO", "Periods", optional=True)
+register_table("5GRACC", "Group access", optional=True)
+register_table("5EMACC", "Employee access", optional=True)
+register_table("5HOBAN", "Holiday bans", optional=True)
+register_table("5BUILD", "Build information", optional=True)
+register_table("5XCHAR", "Extra characteristics/Surcharges", optional=True)
+register_table("5OVER", "Overtime records", optional=True)
+
+
+# Lazy loading of models
+_model_cache: Dict[str, Type] = {}
+_loader_cache: Dict[str, Callable] = {}
+
+
+def _lazy_load_model(table_name: str) -> Optional[Type]:
+    """Lazy load model class for a table."""
+    if table_name in _model_cache:
+        return _model_cache[table_name]
     
-    def __init__(self):
-        self.plugins: Dict[str, TablePlugin] = {}
-        self.definitions: Dict[str, TableDefinition] = {}
-        self.load_order: List[str] = []
-        self._loaded: Set[str] = set()
+    # Model mapping
+    model_mapping = {
+        "5EMPL": ("employee", "Employee"),
+        "5GROUP": ("group", "Group"),
+        "5SHIFT": ("shift", "Shift"),
+        "5WOPL": ("work_location", "WorkLocation"),
+        "5ABSEN": ("absence", "Absence"),
+        "5LEAVT": ("leave_type", "LeaveType"),
+        "5SPSHI": ("shift_detail", "ShiftDetail"),
+        "5MASHI": ("employee_shift", "EmployeeShift"),
+        "5NOTE": ("note", "Note"),
+        "5GRASG": ("group_assignment", "GroupAssignment"),
+        "5LEAEN": ("leave_entitlement", "LeaveEntitlement"),
+        "5CYASS": ("cycle_assignment", "CycleAssignment"),
+        "5CYCLE": ("cycle", "Cycle"),
+        "5HOLID": ("holiday", "Holiday"),
+        "5USER": ("user", "User"),
+        "5BOOK": ("book", "Book"),
+        "5HOASS": ("holiday_assignment", "HolidayAssignment"),
+        "5CYENT": ("cycle_entitlement", "CycleEntitlement"),
+        "5CYEXC": ("cycle_exception", "CycleException"),
+        "5SPMED": ("shift_demand", "ShiftDemand"),
+        "5SHRES": ("shift_restriction", "ShiftRestriction"),
+        "5SCHED": ("shift_schedule", "ShiftSchedule"),
+        "5SPDEM": ("shift_plan_demand", "ShiftPlanDemand"),
+        "5USSET": ("user_setting", "UserSetting"),
+        "5PERIO": ("period", "Period"),
+        "5GRACC": ("group_access", "GroupAccess"),
+        "5EMACC": ("employee_access", "EmployeeAccess"),
+        "5BUILD": ("build", "Build"),
+        "5XCHAR": ("xchar", "XChar"),
+        "5OVER": ("overtime", "Overtime"),
+    }
     
-    def register_plugin(self, plugin: TablePlugin):
-        """Register a table plugin."""
-        self.plugins[plugin.table_name] = plugin
-        logger.debug(f"Registered plugin for {plugin.table_name}")
+    if table_name not in model_mapping:
+        return None
     
-    def register_from_definition(self, definition: TableDefinition):
-        """Register a table from definition."""
-        self.definitions[definition.name] = definition
-        logger.debug(f"Registered definition for {definition.name}")
+    module_name, class_name = model_mapping[table_name]
     
-    def _resolve_dependencies(self) -> List[str]:
-        """Resolve loading order based on dependencies."""
-        # Simple topological sort
-        visited = set()
-        temp_mark = set()
-        order = []
+    try:
+        module = __import__(f"libopenschichtplaner5.models.{module_name}", 
+                           fromlist=[class_name])
+        model_class = getattr(module, class_name)
+        _model_cache[table_name] = model_class
         
-        def visit(table_name: str):
-            if table_name in temp_mark:
-                raise ValueError(f"Circular dependency detected involving {table_name}")
-            if table_name in visited:
-                return
-                
-            temp_mark.add(table_name)
-            
-            # Get dependencies
-            deps = set()
-            if table_name in self.plugins:
-                deps = self.plugins[table_name].dependencies
-            elif table_name in self.definitions:
-                deps = self.definitions[table_name].dependencies
-            
-            for dep in deps:
-                if dep in self.plugins or dep in self.definitions:
-                    visit(dep)
-            
-            temp_mark.remove(table_name)
-            visited.add(table_name)
-            order.append(table_name)
+        # Update registry
+        if table_name in TABLE_REGISTRY:
+            TABLE_REGISTRY[table_name].model_class = model_class
         
-        # Visit all tables
-        all_tables = set(self.plugins.keys()) | set(self.definitions.keys())
-        for table in all_tables:
-            if table not in visited:
-                visit(table)
-        
-        return order
+        return model_class
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load model for {table_name}: {e}")
+        return None
+
+
+def _lazy_load_loader(table_name: str) -> Optional[Callable]:
+    """Lazy load loader function for a table."""
+    if table_name in _loader_cache:
+        return _loader_cache[table_name]
     
-    def load_all_tables(self, dbf_dir: Path) -> Dict[str, List[Any]]:
-        """Load all tables in dependency order."""
-        try:
-            self.load_order = self._resolve_dependencies()
-        except ValueError as e:
-            logger.error(f"Dependency resolution failed: {e}")
-            raise
-        
-        loaded_tables = {}
-        
-        for table_name in self.load_order:
-            try:
-                if table_name in self.plugins:
-                    # Use plugin
-                    plugin = self.plugins[table_name]
-                    dbf_path = dbf_dir / f"{table_name}.DBF"
-                    
-                    if not dbf_path.exists():
-                        if plugin.is_optional:
-                            logger.info(f"Optional table {table_name} not found, skipping")
-                            loaded_tables[table_name] = []
-                            continue
-                        else:
-                            raise FileNotFoundError(f"Required table {table_name} not found at {dbf_path}")
-                    
-                    records = plugin.load_data(dbf_path)
-                    loaded_tables[table_name] = records
-                    
-                elif table_name in self.definitions:
-                    # Use definition
-                    definition = self.definitions[table_name]
-                    loaded_tables[table_name] = self._load_from_definition(definition, dbf_dir)
-                
-                self._loaded.add(table_name)
-                logger.info(f"Loaded {table_name}: {len(loaded_tables[table_name])} records")
-                
-            except Exception as e:
-                is_optional = (
-                    (table_name in self.plugins and self.plugins[table_name].is_optional) or
-                    (table_name in self.definitions and self.definitions[table_name].optional)
-                )
-                
-                if is_optional:
-                    logger.warning(f"Failed to load optional table {table_name}: {e}")
-                    loaded_tables[table_name] = []
-                else:
-                    logger.error(f"Failed to load required table {table_name}: {e}")
-                    raise DBFLoadError(f"Failed to load required table {table_name}") from e
-        
-        return loaded_tables
+    # Loader mapping
+    loader_mapping = {
+        "5EMPL": ("employee", "load_employees"),
+        "5GROUP": ("group", "load_groups"),
+        "5SHIFT": ("shift", "load_shifts"),
+        "5WOPL": ("work_location", "load_work_locations"),
+        "5ABSEN": ("absence", "load_absences"),
+        "5LEAVT": ("leave_type", "load_leave_types"),
+        "5SPSHI": ("shift_detail", "load_shift_details"),
+        "5MASHI": ("employee_shift", "load_employee_shifts"),
+        "5NOTE": ("note", "load_notes"),
+        "5GRASG": ("group_assignment", "load_group_assignments"),
+        "5LEAEN": ("leave_entitlement", "load_leave_entitlements"),
+        "5CYASS": ("cycle_assignment", "load_cycle_assignments"),
+        "5CYCLE": ("cycle", "load_cycles"),
+        "5HOLID": ("holiday", "load_holidays"),
+        "5USER": ("user", "load_users"),
+        "5BOOK": ("book", "load_books"),
+        "5HOASS": ("holiday_assignment", "load_holiday_assignments"),
+        "5CYENT": ("cycle_entitlement", "load_cycle_entitlements"),
+        "5CYEXC": ("cycle_exception", "load_cycle_exceptions"),
+        "5SPMED": ("shift_demand", "load_shift_demands"),
+        "5SHRES": ("shift_restriction", "load_shift_restrictions"),
+        "5SCHED": ("shift_schedule", "load_shift_schedules"),
+        "5SPDEM": ("shift_plan_demand", "load_shift_plan_demands"),
+        "5USSET": ("user_setting", "load_user_settings"),
+        "5PERIO": ("period", "load_periods"),
+        "5GRACC": ("group_access", "load_group_access"),
+        "5EMACC": ("employee_access", "load_employee_access"),
+        "5BUILD": ("build", "load_builds"),
+        "5XCHAR": ("xchar", "load_xchar"),
+        "5OVER": ("overtime", "load_overtime"),
+    }
     
-    def _load_from_definition(self, definition: TableDefinition, dbf_dir: Path) -> List[Any]:
-        """Load table from definition."""
-        dbf_path = dbf_dir / f"{definition.name}.DBF"
-        
-        if not dbf_path.exists():
-            if definition.optional:
-                return []
-            raise FileNotFoundError(f"Required table {definition.name} not found")
-        
-        # Dynamically import loader function
-        module_path, func_name = definition.loader_func_path.rsplit(".", 1)
-        module = import_module(module_path)
+    if table_name not in loader_mapping:
+        return None
+    
+    module_name, func_name = loader_mapping[table_name]
+    
+    try:
+        module = __import__(f"libopenschichtplaner5.models.{module_name}", 
+                           fromlist=[func_name])
         loader_func = getattr(module, func_name)
+        _loader_cache[table_name] = loader_func
         
-        return loader_func(dbf_path)
+        # Update registry
+        if table_name in TABLE_REGISTRY:
+            TABLE_REGISTRY[table_name].loader_func = loader_func
+        
+        return loader_func
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load loader for {table_name}: {e}")
+        return None
+
+
+def load_table(name: str, path: Path) -> List[Any]:
+    """Load a table from DBF file."""
+    if name not in TABLE_REGISTRY:
+        # Handle special cases
+        if name == "5MASHI":
+            # 5MASHI is sometimes an alias for 5SPSHI
+            name = "5SPSHI"
+        else:
+            raise ValueError(f"Unknown table name: {name}")
     
-    def get_load_order(self) -> List[str]:
-        """Get the computed load order."""
-        return self.load_order.copy()
+    metadata = TABLE_REGISTRY[name]
     
-    def is_loaded(self, table_name: str) -> bool:
-        """Check if a table has been loaded."""
-        return table_name in self._loaded
-
-
-# Enhanced registry instance
-enhanced_registry = PluginRegistry()
-
-
-def register_table_definitions_from_json(json_path: Path):
-    """Register table definitions from JSON configuration."""
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    # Check if file exists
+    if not path.exists():
+        if metadata.optional:
+            logger.info(f"Optional table {name} not found at {path}")
+            return []
+        else:
+            raise FileNotFoundError(f"Required table {name} not found at {path}")
     
-    for table_data in data.get('tables', []):
-        definition = TableDefinition(
-            name=table_data['name'],
-            model_class_path=table_data['model_class_path'],
-            loader_func_path=table_data['loader_func_path'],
-            description=table_data.get('description', ''),
-            primary_key=table_data.get('primary_key', 'id'),
-            required_fields=table_data.get('required_fields', []),
-            optional=table_data.get('optional', False),
-            dependencies=set(table_data.get('dependencies', [])),
-            version=table_data.get('version', '1.0')
-        )
-        enhanced_registry.register_from_definition(definition)
-
-
-# Backward compatibility function
-def load_table_enhanced(name: str, path: Path) -> List[Any]:
-    """Enhanced table loading with better error handling."""
-    if name not in enhanced_registry.plugins and name not in enhanced_registry.definitions:
-        # Fallback to original registry
-        from .registry import load_table as original_load_table
-        return original_load_table(name, path)
+    # Get loader function
+    loader = metadata.loader_func or _lazy_load_loader(name)
     
-    # Use enhanced registry for single table
-    dbf_dir = path.parent
-    tables = enhanced_registry.load_all_tables(dbf_dir)
-    return tables.get(name, [])
+    if not loader:
+        # Fallback: try generic loading with model
+        model_class = metadata.model_class or _lazy_load_model(name)
+        if model_class and hasattr(model_class, 'from_record'):
+            from .db.reader import DBFTable
+            table = DBFTable(path)
+            return [model_class.from_record(record) for record in table.records()]
+        else:
+            raise ValueError(f"No loader available for table {name}")
+    
+    try:
+        return loader(path)
+    except Exception as e:
+        if metadata.optional:
+            logger.warning(f"Failed to load optional table {name}: {e}")
+            return []
+        else:
+            raise
+
+
+def get_table_info(name: str) -> Optional[TableMetadata]:
+    """Get metadata for a table."""
+    # Handle aliases
+    if name == "5MASHI":
+        name = "5SPSHI"
+    return TABLE_REGISTRY.get(name)
+
+
+# Convenience lists
+TABLE_NAMES = list(TABLE_REGISTRY.keys())
+TABLE_METADATA = TABLE_REGISTRY
+
+
+# For backward compatibility
+def get_all_table_names() -> List[str]:
+    """Get all registered table names."""
+    return TABLE_NAMES
+
+
+def is_table_optional(name: str) -> bool:
+    """Check if a table is optional."""
+    metadata = get_table_info(name)
+    return metadata.optional if metadata else False
