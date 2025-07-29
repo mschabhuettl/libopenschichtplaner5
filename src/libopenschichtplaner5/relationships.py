@@ -24,6 +24,6 @@ from .relationships_improved import (
 TableRelationship = RelationshipSchema  # Alias for backward compatibility
 
 # Ensure relationships are properly initialized
-if len(improved_relationship_manager.resolver.schemas) == 0:
+if len(improved_relationship_manager.schemas) == 0:
     # Re-create with default relationships
-    improved_relationship_manager.resolver = create_default_resolver()
+    improved_relationship_manager = create_default_resolver()
