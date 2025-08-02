@@ -28,10 +28,25 @@ class ShiftDetail:
 
     @classmethod
     def from_record(cls, record: dict) -> "ShiftDetail":
+        # Handle date field properly
+        date_val = record.get("DATE")
+        if isinstance(date_val, str):
+            from datetime import datetime
+            try:
+                # Try parsing ISO format
+                if '-' in date_val:
+                    date_val = datetime.strptime(date_val[:10], '%Y-%m-%d').date()
+                else:
+                    date_val = None
+            except (ValueError, TypeError):
+                date_val = None
+        elif not isinstance(date_val, date):
+            date_val = None
+            
         return cls(
             id=int(record.get("ID", 0)),
             employee_id=int(record.get("EMPLOYEEID", 0)),
-            date=record.get("DATE"),
+            date=date_val,
             name=normalize_string(record.get("NAME", "")),
             shortname=normalize_string(record.get("SHORTNAME", "")),
             shift_id=int(record.get("SHIFTID", 0)),

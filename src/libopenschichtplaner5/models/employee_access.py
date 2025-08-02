@@ -7,18 +7,19 @@ from ..utils.strings import normalize_string
 
 @dataclass
 class EmployeeAccess:
-    user_id: int
-    employee_id: int
-    rights: str
-    reserved: str
+    """Individual employee permissions and access rights management."""
+    id: int
+    employee_id: int  # References 5EMPL
+    access_code: str  # Permission identifier (REPORTSEE, EDITSHIFT, etc.)
+    value: str        # Access level/configuration
 
     @classmethod
     def from_record(cls, record: dict) -> "EmployeeAccess":
         return cls(
-            user_id=int(record.get("USERID", 0)),
+            id=int(record.get("ID", 0)),
             employee_id=int(record.get("EMPLOYEEID", 0)),
-            rights=record.get("RIGHTS", ""),
-            reserved=record.get("RESERVED", ""),
+            access_code=record.get("ACCESSCODE", ""),
+            value=record.get("VALUE", ""),
         )
 
 

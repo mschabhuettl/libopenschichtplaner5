@@ -60,7 +60,6 @@ class DBFTable:
                     char_decode_errors='replace'
                 )
                 self._encoding = encoding
-                # ENTFERNT: print(f"Successfully loaded {self.path.name} with encoding: {encoding}")
                 return
             except Exception as e:
                 last_error = e
@@ -133,6 +132,24 @@ class DBFTable:
                 return value
             if isinstance(value, datetime):
                 return value.date()
+            # Versuche String-Datumskonvertierung
+            if isinstance(value, str) and value.strip():
+                try:
+                    # Häufige Datumsformate versuchen
+                    value_clean = value.strip()
+                    if len(value_clean) == 8 and value_clean.isdigit():
+                        # YYYYMMDD Format
+                        return datetime.strptime(value_clean, '%Y%m%d').date()
+                    elif '-' in value_clean:
+                        # YYYY-MM-DD Format
+                        return datetime.strptime(value_clean[:10], '%Y-%m-%d').date()
+                    elif '/' in value_clean:
+                        # MM/DD/YYYY oder DD/MM/YYYY Format
+                        parts = value_clean.split('/')
+                        if len(parts) == 3:
+                            return datetime.strptime(value_clean, '%m/%d/%Y').date()
+                except (ValueError, TypeError):
+                    pass
             return None
 
         # Logische Felder

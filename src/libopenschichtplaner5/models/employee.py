@@ -25,6 +25,10 @@ class Employee:
     birthday: Optional[date]
     empstart: Optional[date]
     empend: Optional[date]
+    # Color fields for employee display
+    cfglabel: Optional[int] = None  # Foreground/text color (RGB integer)
+    cbklabel: Optional[int] = None  # Background color (RGB integer) 
+    cbksched: Optional[int] = None  # Schedule background color (RGB integer)
 
     @classmethod
     def from_record(cls, record: dict) -> "Employee":
@@ -47,6 +51,16 @@ class Employee:
         empstart = cls.parse_date(record.get("EMPSTART"))
         empend = cls.parse_date(record.get("EMPEND"))
 
+        # Handle color fields
+        cfglabel = record.get("CFGLABEL")
+        cbklabel = record.get("CBKLABEL") 
+        cbksched = record.get("CBKSCHED")
+
+        # Convert to int if present, otherwise None
+        cfglabel = int(cfglabel) if cfglabel is not None else None
+        cbklabel = int(cbklabel) if cbklabel is not None else None
+        cbksched = int(cbksched) if cbksched is not None else None
+
         return cls(
             id=int(record.get("ID", 0)),
             name=name,
@@ -63,7 +77,10 @@ class Employee:
             function=function,
             birthday=birthday,
             empstart=empstart,
-            empend=empend
+            empend=empend,
+            cfglabel=cfglabel,
+            cbklabel=cbklabel,
+            cbksched=cbksched
         )
 
     @staticmethod
@@ -89,6 +106,24 @@ class Employee:
                     return None
 
         return None
+
+    def get_text_color_hex(self) -> Optional[str]:
+        """Convert foreground color to hex format (#RRGGBB)."""
+        if self.cfglabel is None:
+            return None
+        return f"#{self.cfglabel:06X}"
+    
+    def get_background_color_hex(self) -> Optional[str]:
+        """Convert background color to hex format (#RRGGBB)."""
+        if self.cbklabel is None:
+            return None
+        return f"#{self.cbklabel:06X}"
+    
+    def get_schedule_color_hex(self) -> Optional[str]:
+        """Convert schedule background color to hex format (#RRGGBB)."""
+        if self.cbksched is None:
+            return None
+        return f"#{self.cbksched:06X}"
 
 
 def load_employees(dbf_path: str | Path) -> List[Employee]:

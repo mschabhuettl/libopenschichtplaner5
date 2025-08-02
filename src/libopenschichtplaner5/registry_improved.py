@@ -82,14 +82,21 @@ class DynamicTablePlugin(TablePlugin):
         self._load_imports()
 
     def _load_imports(self):
-        """Dynamically load model class and loader function."""
+        """Dynamically load model class and loader function.
+        
+        This method uses reflection to load the model class and loader function
+        from the paths specified in the table definition. This allows for
+        dynamic registration of tables without hardcoding imports.
+        """
         try:
-            # Load model class
+            # Load model class using dynamic import
+            # Split the path into module and class name (e.g., "models.employee.Employee" -> "models.employee", "Employee")
             module_path, class_name = self.definition.model_class_path.rsplit('.', 1)
             module = importlib.import_module(module_path)
             self._model_class = getattr(module, class_name)
 
-            # Load loader function
+            # Load loader function using dynamic import
+            # Split the path into module and function name (e.g., "models.employee.load_employees" -> "models.employee", "load_employees")
             module_path, func_name = self.definition.loader_func_path.rsplit('.', 1)
             module = importlib.import_module(module_path)
             self._loader_func = getattr(module, func_name)
@@ -157,38 +164,56 @@ class PluginRegistry:
             self.load_errors[definition.name] = str(e)
 
     def _resolve_dependencies(self) -> List[str]:
-        """Resolve table loading order based on dependencies."""
-        # Build dependency graph
+        """Resolve table loading order based on dependencies using topological sorting.
+        
+        This implements Kahn's algorithm for topological sorting to determine the correct
+        order to load tables based on their foreign key dependencies. For example,
+        if table A depends on table B, then B must be loaded before A.
+        
+        Returns:
+            List[str]: Table names in the correct loading order
+            
+        Raises:
+            ValueError: If circular dependencies are detected
+        """
+        # Build dependency graph where each table maps to its dependencies
         graph = defaultdict(set)
-        in_degree = defaultdict(int)
+        in_degree = defaultdict(int)  # Count of incoming dependencies for each table
 
         all_tables = set(self.plugins.keys())
 
+        # Build the dependency graph and calculate in-degrees
         for table_name, plugin in self.plugins.items():
             deps = plugin.dependencies
             graph[table_name] = deps
+            # For each dependency, increment the in-degree of the dependent table
             for dep in deps:
                 if dep in all_tables:
-                    in_degree[dep] += 0  # Initialize
-                    in_degree[table_name] += 1
+                    in_degree[dep] += 0  # Initialize dependency table
+                    in_degree[table_name] += 1  # Increment dependent table's in-degree
 
         # Topological sort using Kahn's algorithm
+        # Start with tables that have no dependencies (in-degree = 0)
         queue = [table for table in all_tables if in_degree[table] == 0]
         result = []
 
+        # Process tables in dependency order
         while queue:
+            # Get a table with no remaining dependencies
             table = queue.pop(0)
             result.append(table)
 
-            # Check all tables that depend on this one
+            # Update in-degrees for tables that depend on the current table
             for other_table in all_tables:
                 if table in graph[other_table]:
                     in_degree[other_table] -= 1
+                    # If all dependencies are satisfied, add to queue
                     if in_degree[other_table] == 0:
                         queue.append(other_table)
 
+        # Check for circular dependencies
         if len(result) != len(all_tables):
-            # Circular dependency detected
+            # Some tables couldn't be processed - indicates circular dependency
             remaining = all_tables - set(result)
             raise ValueError(f"Circular dependency detected involving tables: {remaining}")
 
@@ -196,14 +221,32 @@ class PluginRegistry:
 
     def load_all_tables(self, dbf_dir: Path,
                         extensions: List[str] = None) -> Dict[str, List[Any]]:
-        """Load all registered tables in dependency order."""
+        """Load all registered tables from DBF files in dependency order.
+        
+        This method loads all registered tables from the specified directory,
+        respecting dependency relationships. Tables are loaded in the order
+        determined by the dependency resolution algorithm.
+        
+        Args:
+            dbf_dir: Directory containing the DBF files
+            extensions: List of file extensions to try (default: [".DBF", ".dbf", ".txt", ".TXT"])
+            
+        Returns:
+            Dict mapping table names to loaded data records
+            
+        Raises:
+            DBFLoadError: If a required table fails to load
+            FileNotFoundError: If a required table file is not found
+        """
+        # Default file extensions to try when loading tables
         if extensions is None:
             extensions = [".DBF", ".dbf", ".txt", ".TXT"]
 
+        # Clear any previously loaded data
         self.loaded_tables.clear()
         self.load_errors.clear()
 
-        # Resolve loading order
+        # Determine the correct loading order based on dependencies
         try:
             load_order = self._resolve_dependencies()
         except ValueError as e:
@@ -212,21 +255,22 @@ class PluginRegistry:
 
         logger.info(f"Loading tables in order: {load_order}")
 
-        # Load tables
+        # Load each table in dependency order
         for table_name in load_order:
             plugin = self.plugins[table_name]
 
-            # Try different file extensions
+            # Try to find the table file with different extensions
             loaded = False
             for ext in extensions:
                 file_path = dbf_dir / f"{table_name}{ext}"
                 if file_path.exists():
                     try:
                         logger.info(f"Loading {table_name} from {file_path}")
+                        # Use the plugin's loader to read the data
                         data = plugin.load_data(file_path)
                         self.loaded_tables[table_name] = data
 
-                        # Store metadata
+                        # Store metadata for debugging and monitoring
                         self.metadata[table_name] = {
                             "path": str(file_path),
                             "count": len(data),
@@ -234,7 +278,7 @@ class PluginRegistry:
                             "model_class": plugin.model_class.__name__ if plugin.model_class else None
                         }
 
-                        # Validate data
+                        # Run data validation if implemented
                         errors = plugin.validate_data(data)
                         if errors:
                             logger.warning(f"Validation errors for {table_name}: {errors}")
@@ -248,13 +292,15 @@ class PluginRegistry:
                         logger.error(error_msg)
                         self.load_errors[table_name] = str(e)
 
+                        # Only raise exception for required tables
                         if not plugin.is_optional:
                             raise DBFLoadError(error_msg)
 
+            # Handle case where no file was found for this table
             if not loaded:
                 if plugin.is_optional:
                     logger.info(f"Optional table {table_name} not found")
-                    self.loaded_tables[table_name] = []
+                    self.loaded_tables[table_name] = []  # Empty list for missing optional tables
                 else:
                     raise FileNotFoundError(f"Required table {table_name} not found in {dbf_dir}")
 
@@ -432,6 +478,86 @@ def register_standard_tables():
             loader_func_path="libopenschichtplaner5.models.overtime.load_overtime",
             description="Overtime records",
             dependencies={"5EMPL"},
+            optional=True
+        ),
+        TableDefinition(
+            name="5CYENT",
+            model_class_path="libopenschichtplaner5.models.cycle_entitlement.CycleEntitlement",
+            loader_func_path="libopenschichtplaner5.models.cycle_entitlement.load_cycle_entitlements",
+            description="Cycle entitlements - maps cycles to shifts",
+            dependencies={"5CYCLE", "5SHIFT"}
+        ),
+        TableDefinition(
+            name="5CYEXC",
+            model_class_path="libopenschichtplaner5.models.cycle_exception.CycleException",
+            loader_func_path="libopenschichtplaner5.models.cycle_exception.load_cycle_exceptions",
+            description="Cycle exceptions - handles scheduling exceptions",
+            dependencies={"5CYCLE", "5SHIFT"},
+            optional=True  # Currently empty
+        ),
+        TableDefinition(
+            name="5EMACC",
+            model_class_path="libopenschichtplaner5.models.employee_access.EmployeeAccess",
+            loader_func_path="libopenschichtplaner5.models.employee_access.load_employee_access",
+            description="Employee access control - individual permissions",
+            dependencies={"5EMPL"}
+        ),
+        TableDefinition(
+            name="5GRACC",
+            model_class_path="libopenschichtplaner5.models.group_access.GroupAccess",
+            loader_func_path="libopenschichtplaner5.models.group_access.load_group_access",
+            description="Group access control - group-level permissions",
+            dependencies={"5GROUP"}
+        ),
+        TableDefinition(
+            name="5HOBAN",
+            model_class_path="libopenschichtplaner5.models.holiday_assignment.HolidayAssignment",
+            loader_func_path="libopenschichtplaner5.models.holiday_assignment.load_holiday_assignments",
+            description="Holiday bans - leave restriction periods",
+            dependencies={"5GROUP"}
+        ),
+        TableDefinition(
+            name="5PERIO",
+            model_class_path="libopenschichtplaner5.models.period.Period",
+            loader_func_path="libopenschichtplaner5.models.period.load_periods",
+            description="Special periods - holidays, training blocks",
+            dependencies={"5GROUP"}
+        ),
+        TableDefinition(
+            name="5RESTR",
+            model_class_path="libopenschichtplaner5.models.shift_restriction.ShiftRestriction",
+            loader_func_path="libopenschichtplaner5.models.shift_restriction.load_shift_restrictions",
+            description="Shift restrictions - employee shift preferences/restrictions",
+            dependencies={"5EMPL", "5SHIFT"}
+        ),
+        TableDefinition(
+            name="5SHDEM",
+            model_class_path="libopenschichtplaner5.models.shift_demand.ShiftDemand",
+            loader_func_path="libopenschichtplaner5.models.shift_demand.load_shift_demands",
+            description="Standard shift demands - weekly staffing requirements",
+            dependencies={"5GROUP", "5SHIFT", "5WOPL"}
+        ),
+        TableDefinition(
+            name="5SPDEM",
+            model_class_path="libopenschichtplaner5.models.shift_plan_demand.ShiftPlanDemand",
+            loader_func_path="libopenschichtplaner5.models.shift_plan_demand.load_shift_plan_demands",
+            description="Special shift demands - date-specific staffing overrides",
+            dependencies={"5GROUP", "5SHIFT", "5WOPL"}
+        ),
+        TableDefinition(
+            name="5USETT",
+            model_class_path="libopenschichtplaner5.models.user_setting.UserSetting",
+            loader_func_path="libopenschichtplaner5.models.user_setting.load_user_settings",
+            description="User settings - global system configuration",
+            dependencies=set(),
+            optional=True  # Singleton table
+        ),
+        TableDefinition(
+            name="5DADEM",
+            model_class_path="libopenschichtplaner5.models.shift_demand.ShiftDemand",  # Reuse existing model
+            loader_func_path="libopenschichtplaner5.models.shift_demand.load_day_demands",
+            description="Day demands - daily staffing requirements",
+            dependencies={"5SHIFT"},
             optional=True
         ),
     ]

@@ -7,11 +7,12 @@ from ..utils.strings import normalize_string
 
 @dataclass
 class ShiftRestriction:
+    """Defines which employees can/cannot work specific shifts on specific weekdays."""
     id: int
-    employee_id: int
-    weekday: str
-    shift_id: int
-    restrict: str
+    employee_id: int  # References 5EMPL
+    weekday: int      # Day of week (0=Sunday, 1=Monday, etc.)
+    shift_id: int     # References 5SHIFT
+    restrict: int     # Restriction type (1=preferred, 2=forbidden)
     reserved: str
 
     @classmethod
@@ -19,9 +20,9 @@ class ShiftRestriction:
         return cls(
             id=int(record.get("ID", 0)),
             employee_id=int(record.get("EMPLOYEEID", 0)),
-            weekday=record.get("WEEKDAY", ""),
+            weekday=int(record.get("WEEKDAY", 0)),
             shift_id=int(record.get("SHIFTID", 0)),
-            restrict=record.get("RESTRICT", ""),
+            restrict=int(record.get("RESTRICT", 0)),
             reserved=record.get("RESERVED", "")
         )
 

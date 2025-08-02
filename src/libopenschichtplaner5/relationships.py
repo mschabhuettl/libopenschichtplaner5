@@ -26,4 +26,5 @@ TableRelationship = RelationshipSchema  # Alias for backward compatibility
 # Ensure relationships are properly initialized
 if len(improved_relationship_manager.schemas) == 0:
     # Re-create with default relationships
-    improved_relationship_manager = create_default_resolver()
+    from .relationships_improved import create_default_resolver
+    improved_relationship_manager.__dict__.update(create_default_resolver().__dict__)

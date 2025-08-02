@@ -7,18 +7,19 @@ from ..utils.strings import normalize_string
 
 @dataclass
 class GroupAccess:
+    """Group-level permissions and access rights management."""
     id: int
-    user_id: int
-    group_id: int
-    access_level: Optional[int]
+    group_id: int     # References 5GROUP
+    access_code: str  # Permission identifier (REPORTSEE, EDITSHIFT, etc.)
+    value: str        # Access level/configuration
 
     @classmethod
     def from_record(cls, record: dict) -> "GroupAccess":
         return cls(
             id=int(record.get("ID", 0)),
-            user_id=int(record.get("USERID", 0)),
             group_id=int(record.get("GROUPID", 0)),
-            access_level=int(record.get("ACCESSLEVEL", 0)) if record.get("ACCESSLEVEL") else None,
+            access_code=record.get("ACCESSCODE", ""),
+            value=record.get("VALUE", ""),
         )
 
 def load_group_access(dbf_path: str | Path) -> list[GroupAccess]:

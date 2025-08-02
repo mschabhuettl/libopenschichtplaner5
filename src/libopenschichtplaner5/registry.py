@@ -20,7 +20,7 @@ from .registry_improved import (
 # For backward compatibility
 def get_all_table_names():
     """Get all registered table names."""
-    return TABLE_NAMES
+    return list(enhanced_registry.plugins.keys())
 
 def is_table_optional(name: str) -> bool:
     """Check if a table is optional."""
@@ -33,3 +33,6 @@ if not enhanced_registry.plugins:
 
 # Export the global registry instance
 registry = enhanced_registry
+
+# Make sure we have up-to-date TABLE_NAMES
+TABLE_NAMES = list(enhanced_registry.plugins.keys())
