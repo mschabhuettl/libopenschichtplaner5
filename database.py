@@ -3822,6 +3822,81 @@ class SP5Database:
             json.dump(entries, f, ensure_ascii=False, indent=2)
         return entry
 
+    # ── Schicht-Wünsche & Sperrtage ──────────────────────────
+
+    def _wishes_path(self) -> str:
+        """Path to wishes.json stored in the backend data directory."""
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, 'wishes.json')
+
+    def get_wishes(self, employee_id: Optional[int] = None,
+                   year: Optional[int] = None, month: Optional[int] = None) -> List[Dict]:
+        """Return shift wishes/blocked days, optionally filtered."""
+        path = self._wishes_path()
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                entries: List[Dict] = json.load(f)
+        except Exception:
+            return []
+        if employee_id is not None:
+            entries = [e for e in entries if e.get('employee_id') == employee_id]
+        if year is not None:
+            entries = [e for e in entries if str(e.get('date', ''))[:4] == str(year)]
+        if month is not None:
+            entries = [e for e in entries if str(e.get('date', ''))[5:7] == f'{month:02d}']
+        return entries
+
+    def add_wish(self, employee_id: int, date: str, wish_type: str,
+                 shift_id: Optional[int] = None, note: str = '') -> Dict:
+        """Add a wish (WUNSCH) or blocked day (SPERRUNG).
+
+        wish_type: 'WUNSCH' | 'SPERRUNG'
+        """
+        import datetime as _dt
+        path = self._wishes_path()
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    entries: List[Dict] = json.load(f)
+            except Exception:
+                entries = []
+        else:
+            entries = []
+        max_id = max((e.get('id', 0) for e in entries), default=0)
+        entry = {
+            'id': max_id + 1,
+            'employee_id': employee_id,
+            'date': date,
+            'wish_type': wish_type,  # WUNSCH | SPERRUNG
+            'shift_id': shift_id,
+            'note': note,
+            'created_at': _dt.datetime.now().isoformat(timespec='seconds'),
+        }
+        entries.append(entry)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+        return entry
+
+    def delete_wish(self, wish_id: int) -> int:
+        """Delete a wish by ID. Returns 1 if deleted, 0 if not found."""
+        path = self._wishes_path()
+        if not os.path.exists(path):
+            return 0
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                entries: List[Dict] = json.load(f)
+        except Exception:
+            return 0
+        new_entries = [e for e in entries if e.get('id') != wish_id]
+        if len(new_entries) == len(entries):
+            return 0
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(new_entries, f, ensure_ascii=False, indent=2)
+        return 1
+
     # ── Overtime Summary ──────────────────────────────────────
 
     def get_overtime_summary(self, year: int, group_id: Optional[int] = None) -> List[Dict]:
