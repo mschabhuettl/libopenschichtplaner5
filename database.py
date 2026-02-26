@@ -4112,3 +4112,116 @@ class SP5Database:
                     entry['source_date'] = date_str
                     result.append(entry)
         return result
+
+    # ── Burnout-Radar ─────────────────────────────────────────
+    def get_burnout_radar(self, year: int, month: int,
+                          streak_threshold: int = 6,
+                          overtime_threshold_pct: float = 20.0,
+                          group_id: Optional[int] = None) -> List[Dict]:
+        """
+        Analyse schedule to detect at-risk employees:
+        1. Long consecutive work streaks (>= streak_threshold days)
+        2. Significant overtime (actual_hours > target_hours * (1 + overtime_threshold_pct/100))
+        Returns list of {employee_id, employee_name, risk_level, reasons, streak, overtime_pct}
+        """
+        from datetime import date as _date, timedelta as _td
+        import calendar as _cal
+
+        employees = self.get_employees()
+        if group_id:
+            group_member_ids = {r.get('EMPLOYEEID') for r in self._read('MAGRP') if r.get('GROUPID') == group_id}
+            employees = [e for e in employees if e['ID'] in group_member_ids]
+
+        # Build set of working dates per employee for a 6-week window (3 weeks before + current month)
+        days_in_month = _cal.monthrange(year, month)[1]
+        month_start = _date(year, month, 1)
+        window_start = month_start - _td(days=21)  # 3 weeks before
+        window_end = _date(year, month, days_in_month)
+
+        # Collect all working days from MASHI + SPSHI in window
+        emp_work_dates: dict[int, set] = {}
+        for table in ('MASHI', 'SPSHI'):
+            for r in self._read(table):
+                d_str = r.get('DATE', '')
+                if not d_str or len(d_str) < 10:
+                    continue
+                try:
+                    d = _date.fromisoformat(d_str[:10])
+                except ValueError:
+                    continue
+                if window_start <= d <= window_end:
+                    eid = r.get('EMPLOYEEID')
+                    if eid:
+                        emp_work_dates.setdefault(eid, set()).add(d)
+
+        results = []
+        for emp in employees:
+            eid = emp['ID']
+            worked = sorted(emp_work_dates.get(eid, set()))
+            if not worked:
+                continue
+
+            # Find longest streak ending in current month
+            max_streak = 0
+            streak_end_date = None
+            i = 0
+            while i < len(worked):
+                streak = 1
+                j = i + 1
+                while j < len(worked) and (worked[j] - worked[j - 1]).days == 1:
+                    streak += 1
+                    j += 1
+                if streak > max_streak:
+                    max_streak = streak
+                    streak_end_date = worked[j - 1]
+                i = j
+
+            # Only consider streaks that extend into the current month
+            streak_in_month = streak_end_date and streak_end_date >= month_start if streak_end_date else False
+
+            # Get overtime for current month
+            try:
+                stats = self.get_employee_stats_month(eid, year, month)
+                target_h = stats.get('target_hours', 0)
+                actual_h = stats.get('actual_hours', 0)
+                if target_h > 0:
+                    ot_pct = ((actual_h - target_h) / target_h) * 100
+                else:
+                    ot_pct = 0
+                ot_hours = actual_h - target_h
+            except Exception:
+                ot_pct = 0
+                ot_hours = 0
+                target_h = 0
+                actual_h = 0
+
+            reasons = []
+            if streak_in_month and max_streak >= streak_threshold:
+                reasons.append(f'{max_streak} Tage am Stück')
+            if ot_pct >= overtime_threshold_pct:
+                reasons.append(f'+{ot_pct:.0f}% Überstunden ({ot_hours:+.1f}h)')
+
+            if not reasons:
+                continue
+
+            # Risk level
+            risk_level = 'high' if (
+                (streak_in_month and max_streak >= streak_threshold + 2) or ot_pct >= 30
+            ) else 'medium'
+
+            results.append({
+                'employee_id': eid,
+                'employee_name': f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}",
+                'employee_short': emp.get('SHORTNAME', ''),
+                'risk_level': risk_level,
+                'reasons': reasons,
+                'streak': max_streak if streak_in_month else 0,
+                'overtime_pct': round(ot_pct, 1),
+                'overtime_hours': round(ot_hours, 1),
+                'actual_hours': round(actual_h, 1),
+                'target_hours': round(target_h, 1),
+            })
+
+        # Sort: high risk first, then by streak desc
+        results.sort(key=lambda x: (0 if x['risk_level'] == 'high' else 1, -x['streak'], -x['overtime_pct']))
+        return results
