@@ -4300,3 +4300,95 @@ class SP5Database:
         # Sort: high risk first, then by streak desc
         results.sort(key=lambda x: (0 if x['risk_level'] == 'high' else 1, -x['streak'], -x['overtime_pct']))
         return results
+
+    # ── Schicht-Tauschbörse ───────────────────────────────────
+
+    def _swap_requests_path(self) -> str:
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, 'swap_requests.json')
+
+    def _load_swap_requests(self) -> List[Dict]:
+        path = self._swap_requests_path()
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_swap_requests(self, entries: List[Dict]):
+        path = self._swap_requests_path()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+
+    def get_swap_requests(self, status: Optional[str] = None,
+                          employee_id: Optional[int] = None) -> List[Dict]:
+        entries = self._load_swap_requests()
+        if status:
+            entries = [e for e in entries if e.get('status') == status]
+        if employee_id is not None:
+            entries = [e for e in entries if (
+                e.get('requester_id') == employee_id or
+                e.get('partner_id') == employee_id
+            )]
+        return sorted(entries, key=lambda e: e.get('created_at', ''), reverse=True)
+
+    def create_swap_request(self, requester_id: int, requester_date: str,
+                            partner_id: int, partner_date: str,
+                            note: str = '') -> Dict:
+        import datetime as _dt
+        entries = self._load_swap_requests()
+        new_id = max((e.get('id', 0) for e in entries), default=0) + 1
+        entry = {
+            'id': new_id,
+            'requester_id': requester_id,
+            'requester_date': requester_date,
+            'partner_id': partner_id,
+            'partner_date': partner_date,
+            'note': note,
+            'status': 'pending',      # pending | approved | rejected | cancelled
+            'created_at': _dt.datetime.now().isoformat(timespec='seconds'),
+            'resolved_at': None,
+            'resolved_by': None,
+            'reject_reason': '',
+        }
+        entries.append(entry)
+        self._save_swap_requests(entries)
+        return entry
+
+    def resolve_swap_request(self, swap_id: int, action: str,
+                              resolved_by: str = 'planner',
+                              reject_reason: str = '') -> Optional[Dict]:
+        """action: 'approve' or 'reject'"""
+        import datetime as _dt
+        entries = self._load_swap_requests()
+        for entry in entries:
+            if entry.get('id') == swap_id:
+                if entry['status'] != 'pending':
+                    return None  # already resolved
+                entry['status'] = 'approved' if action == 'approve' else 'rejected'
+                entry['resolved_at'] = _dt.datetime.now().isoformat(timespec='seconds')
+                entry['resolved_by'] = resolved_by
+                entry['reject_reason'] = reject_reason
+                self._save_swap_requests(entries)
+                return entry
+        return None
+
+    def cancel_swap_request(self, swap_id: int) -> int:
+        entries = self._load_swap_requests()
+        for entry in entries:
+            if entry.get('id') == swap_id:
+                entry['status'] = 'cancelled'
+                self._save_swap_requests(entries)
+                return 1
+        return 0
+
+    def delete_swap_request(self, swap_id: int) -> int:
+        entries = self._load_swap_requests()
+        new_entries = [e for e in entries if e.get('id') != swap_id]
+        if len(new_entries) == len(entries):
+            return 0
+        self._save_swap_requests(new_entries)
+        return 1
