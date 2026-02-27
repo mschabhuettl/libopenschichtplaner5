@@ -55,10 +55,10 @@ def _decode_string(raw: bytes) -> str:
             pass
 
     # Plain ASCII / binary data field (WORKDAYS, STARTEND*, etc.)
-    # Strip trailing spaces/nulls and decode as ASCII
+    # Strip trailing spaces/nulls and decode as latin-1 to preserve all byte values
     stripped = raw.rstrip(b'\x00\x20')
     try:
-        return stripped.decode('ascii', errors='replace').strip()
+        return stripped.decode('latin-1').strip()
     except Exception:
         return raw.split(b'\x00')[0].decode('latin-1', errors='replace').strip()
 

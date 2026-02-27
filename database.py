@@ -462,61 +462,42 @@ class SP5Database:
         """Verify username+password, return user dict (without hash) or None."""
         import hashlib
         rows = self._read('USER')
+        expected_bytes = hashlib.md5(password.encode('utf-8')).digest()
         for r in rows:
             if r.get('HIDE'):
                 continue
             if r.get('NAME', '').strip().lower() != name.strip().lower():
                 continue
-            digest = r.get('DIGEST', b'')
+            digest = r.get('DIGEST', '')
+            # Normalize: stored as bytes or as latin-1 decoded string
             if isinstance(digest, bytes):
-                expected = hashlib.md5(password.encode('utf-8')).digest()
-                if digest == expected:
-                    role = self._role_from_record(r)
-                    is_admin = role == 'Admin'
-                    is_planer = role == 'Planer'
-                    return {
-                        'ID': r.get('ID'),
-                        'NAME': r.get('NAME', ''),
-                        'DESCRIP': r.get('DESCRIP', ''),
-                        'ADMIN': bool(r.get('ADMIN')),
-                        'RIGHTS': r.get('RIGHTS', 0),
-                        'role': role,
-                        'WDUTIES': bool(r.get('WDUTIES')) if not is_admin else True,
-                        'WABSENCES': bool(r.get('WABSENCES')) if not is_admin else True,
-                        'WOVERTIMES': bool(r.get('WOVERTIMES')) if not is_admin else True,
-                        'WNOTES': bool(r.get('WNOTES')) if not is_admin else True,
-                        'WCYCLEASS': bool(r.get('WCYCLEASS')) if not is_admin else True,
-                        'WPAST': bool(r.get('WPAST')) if not is_admin else True,
-                        'WACCEMWND': bool(r.get('WACCEMWND')) if not is_admin else True,
-                        'WACCGRWND': bool(r.get('WACCGRWND')) if not is_admin else True,
-                        'BACKUP': bool(r.get('BACKUP')) if not is_admin else True,
-                        'SHOWSTATS': bool(r.get('SHOWSTATS')) if not is_admin else True,
-                        'ACCADMWND': is_admin,
-                    }
-            # Also try string comparison (for migrated records)
+                digest_bytes = digest
             elif isinstance(digest, str):
-                if digest == hashlib.md5(password.encode('utf-8')).hexdigest()[:16]:
-                    role = self._role_from_record(r)
-                    is_admin = role == 'Admin'
-                    return {
-                        'ID': r.get('ID'),
-                        'NAME': r.get('NAME', ''),
-                        'DESCRIP': r.get('DESCRIP', ''),
-                        'ADMIN': bool(r.get('ADMIN')),
-                        'RIGHTS': r.get('RIGHTS', 0),
-                        'role': role,
-                        'WDUTIES': True if is_admin else False,
-                        'WABSENCES': True if is_admin else False,
-                        'WOVERTIMES': True if is_admin else False,
-                        'WNOTES': True if is_admin else False,
-                        'WCYCLEASS': True if is_admin else False,
-                        'WPAST': True if is_admin else False,
-                        'WACCEMWND': True if is_admin else False,
-                        'WACCGRWND': True if is_admin else False,
-                        'BACKUP': True if is_admin else False,
-                        'SHOWSTATS': True,
-                        'ACCADMWND': is_admin,
-                    }
+                digest_bytes = digest.encode('latin-1')
+            else:
+                continue
+            if digest_bytes == expected_bytes:
+                role = self._role_from_record(r)
+                is_admin = role == 'Admin'
+                return {
+                    'ID': r.get('ID'),
+                    'NAME': r.get('NAME', ''),
+                    'DESCRIP': r.get('DESCRIP', ''),
+                    'ADMIN': bool(r.get('ADMIN')),
+                    'RIGHTS': r.get('RIGHTS', 0),
+                    'role': role,
+                    'WDUTIES': bool(r.get('WDUTIES')) if not is_admin else True,
+                    'WABSENCES': bool(r.get('WABSENCES')) if not is_admin else True,
+                    'WOVERTIMES': bool(r.get('WOVERTIMES')) if not is_admin else True,
+                    'WNOTES': bool(r.get('WNOTES')) if not is_admin else True,
+                    'WCYCLEASS': bool(r.get('WCYCLEASS')) if not is_admin else True,
+                    'WPAST': bool(r.get('WPAST')) if not is_admin else True,
+                    'WACCEMWND': bool(r.get('WACCEMWND')) if not is_admin else True,
+                    'WACCGRWND': bool(r.get('WACCGRWND')) if not is_admin else True,
+                    'BACKUP': bool(r.get('BACKUP')) if not is_admin else True,
+                    'SHOWSTATS': bool(r.get('SHOWSTATS')) if not is_admin else True,
+                    'ACCADMWND': is_admin,
+                }
         return None
 
     # ── Cycles ─────────────────────────────────────────────────

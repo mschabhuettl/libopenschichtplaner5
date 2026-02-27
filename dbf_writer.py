@@ -79,6 +79,10 @@ def _encode_field(value: Any, field: Dict) -> bytes:
         return b' ' * flen
 
     if ftype == 'C':
+        # If bytes are passed directly (e.g. raw binary fields like DIGEST),
+        # write them as-is padded to field length.
+        if isinstance(value, bytes):
+            return (value + b'\x00' * flen)[:flen]
         return _encode_string(str(value) if value else '', flen)
 
     elif ftype == 'D':
