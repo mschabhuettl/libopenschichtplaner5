@@ -331,6 +331,13 @@ class SP5Database:
         fields = get_table_fields(filepath)
         new_id = self._next_id('USER')
         rows = self._read('USER')
+        # Uniqueness check: NAME (username) must be unique among active users
+        name_lower = (data.get('NAME') or '').strip().lower()
+        for row in rows:
+            if row.get('HIDE') or row.get('HIDE') == 1:
+                continue
+            if (row.get('NAME') or '').strip().lower() == name_lower:
+                raise ValueError(f"DUPLICATE:USERNAME:{data.get('NAME')}")
         max_pos = max((r.get('POSITION', 0) or 0 for r in rows), default=0) + 1
 
         role = data.get('role', 'Leser')
@@ -1755,6 +1762,14 @@ class SP5Database:
         new_id = self._next_id('EMPL')
         rows = self._read('EMPL')
         max_pos = max((r.get('POSITION', 0) or 0 for r in rows), default=0) + 1
+        # Uniqueness check: SHORTNAME must be unique among active employees (if provided)
+        shortname = (data.get('SHORTNAME') or '').strip().upper()
+        if shortname:
+            for row in rows:
+                if row.get('HIDE'):
+                    continue
+                if (row.get('SHORTNAME') or '').strip().upper() == shortname:
+                    raise ValueError(f"DUPLICATE:SHORTNAME:{shortname}")
         field_names = {f['name'] for f in fields}
         record = {
             'ID': new_id,
@@ -1822,12 +1837,52 @@ class SP5Database:
         return True
 
     def delete_employee(self, emp_id: int) -> int:
+        """Soft-delete (hide) an employee and cascade-delete their related records.
+
+        Cascades:
+        - MASHI, SPSHI, ABSEN: all entries for this employee are hard-deleted
+        - BOOK: all bookings for this employee are hard-deleted
+        - Wishes (JSON): all wishes for this employee are removed
+        - CYASS: cycle assignments for this employee are removed
+        """
         filepath = self._table('EMPL')
         fields = get_table_fields(filepath)
         raw_idx, _ = self._find_record('EMPL', emp_id)
         if raw_idx is None:
             return 0
         update_record(filepath, fields, raw_idx, {'HIDE': 1})
+        # Cascade: remove schedule, absence, booking, cycle-assignment records
+        for table in ('MASHI', 'SPSHI', 'ABSEN'):
+            t_path = self._table(table)
+            t_fields = get_table_fields(t_path)
+            matches = find_all_records(t_path, t_fields, EMPLOYEEID=emp_id)
+            for idx, _ in reversed(matches):  # reverse to keep indices stable
+                delete_record(t_path, t_fields, idx)
+        # BOOK table uses EMPLOYEEID too
+        book_path = self._table('BOOK')
+        book_fields = get_table_fields(book_path)
+        book_matches = find_all_records(book_path, book_fields, EMPLOYEEID=emp_id)
+        for idx, _ in reversed(book_matches):
+            delete_record(book_path, book_fields, idx)
+        # CYASS: cycle assignments
+        cyass_path = self._table('CYASS')
+        cyass_fields = get_table_fields(cyass_path)
+        cyass_matches = find_all_records(cyass_path, cyass_fields, EMPLOYEEID=emp_id)
+        for idx, _ in reversed(cyass_matches):
+            delete_record(cyass_path, cyass_fields, idx)
+        # Wishes (JSON file)
+        wishes_path = self._wishes_path()
+        if os.path.exists(wishes_path):
+            try:
+                import json as _json
+                with open(wishes_path, 'r', encoding='utf-8') as f:
+                    wishes = _json.load(f)
+                wishes = [w for w in wishes if w.get('employee_id') != emp_id]
+                with open(wishes_path, 'w', encoding='utf-8') as f:
+                    _json.dump(wishes, f, ensure_ascii=False)
+            except Exception:
+                pass  # non-fatal: wishes file might not exist or be malformed
+        self._invalidate_cache('EMPL')
         return 1
 
     # ── Write: Groups ─────────────────────────────────────────
@@ -1912,6 +1967,13 @@ class SP5Database:
         new_id = self._next_id('SHIFT')
         rows = self._read('SHIFT')
         max_pos = max((r.get('POSITION', 0) or 0 for r in rows), default=0) + 1
+        # Uniqueness check: NAME must be unique among active shifts
+        name_lower = (data.get('NAME') or '').strip().lower()
+        for row in rows:
+            if row.get('HIDE'):
+                continue
+            if (row.get('NAME') or '').strip().lower() == name_lower:
+                raise ValueError(f"DUPLICATE:SHIFTNAME:{data.get('NAME')}")
         record = {
             'ID': new_id,
             'NAME': data.get('NAME', ''),
