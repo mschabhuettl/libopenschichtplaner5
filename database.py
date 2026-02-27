@@ -19,7 +19,12 @@ class SP5Database:
         return os.path.join(self.db_path, f"5{name}.DBF")
 
     def _read(self, name: str) -> List[Dict[str, Any]]:
-        return read_dbf(self._table(name))
+        """Read a DBF table, using an in-instance cache to avoid repeated file reads."""
+        if not hasattr(self, '_read_cache'):
+            self._read_cache: dict = {}
+        if name not in self._read_cache:
+            self._read_cache[name] = read_dbf(self._table(name))
+        return self._read_cache[name]
 
     def _color_fields(self, record: Dict) -> Dict:
         """Convert BGR color fields to hex strings."""
