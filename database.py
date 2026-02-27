@@ -26,6 +26,11 @@ class SP5Database:
             self._read_cache[name] = read_dbf(self._table(name))
         return self._read_cache[name]
 
+    def _invalidate_cache(self, name: str) -> None:
+        """Invalidate the read cache for a table after a write operation."""
+        if hasattr(self, '_read_cache') and name in self._read_cache:
+            del self._read_cache[name]
+
     def _color_fields(self, record: Dict) -> Dict:
         """Convert BGR color fields to hex strings."""
         for key in ('COLORTEXT', 'COLORBAR', 'COLORBK', 'CBKLABEL', 'CBKSCHED', 'CFGLABEL'):
@@ -1776,6 +1781,7 @@ class SP5Database:
             if key in field_names and key in data and data[key] is not None:
                 record[key] = data[key]
         append_record(filepath, fields, record)
+        self._invalidate_cache('EMPL')
         return {**record, 'id': new_id}
 
     def update_employee(self, emp_id: int, data: dict) -> dict:
@@ -3319,6 +3325,7 @@ class SP5Database:
             if key in data:
                 update_data[key] = data[key]
         update_record(filepath, fields, raw_idx, update_data)
+        self._invalidate_cache('USETT')
         return self.get_usett()
 
     # ── Special Staffing Requirements (SPDEM) ─────────────────
