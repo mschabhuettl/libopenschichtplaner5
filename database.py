@@ -143,6 +143,17 @@ class SP5Database:
         assignments = self._read('GRASG')
         return [a['EMPLOYEEID'] for a in assignments if a.get('GROUPID') == group_id]
 
+    def get_all_group_members(self) -> Dict[int, List[int]]:
+        """Return a mapping of group_id -> [employee_ids] in one pass (avoids N+1)."""
+        assignments = self._read('GRASG')
+        result: Dict[int, List[int]] = {}
+        for a in assignments:
+            gid = a.get('GROUPID')
+            eid = a.get('EMPLOYEEID')
+            if gid is not None and eid is not None:
+                result.setdefault(gid, []).append(eid)
+        return result
+
     def get_employee_groups(self, emp_id: int) -> List[int]:
         """Return list of group IDs an employee belongs to."""
         assignments = self._read('GRASG')
