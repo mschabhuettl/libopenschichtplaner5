@@ -3,7 +3,6 @@ Pure Python DBF/dBASE reader for Schichtplaner5 databases.
 Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
 import struct
-import os
 from typing import List, Dict, Any, Optional
 
 
