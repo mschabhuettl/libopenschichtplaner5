@@ -1654,10 +1654,11 @@ class SP5Database:
                 'date': r.get('DATE', ''),
                 'text1': r.get('TEXT1', ''),
                 'text2': r.get('TEXT2', ''),
+                'category': (r.get('RESERVED') or '').strip(),
             })
         return result
 
-    def add_note(self, date: str, text: str, employee_id: int = 0, text2: str = '') -> Dict:
+    def add_note(self, date: str, text: str, employee_id: int = 0, text2: str = '', category: str = '') -> Dict:
         """Append a note to 5NOTE."""
         filepath = self._table('NOTE')
         fields = get_table_fields(filepath)
@@ -1670,7 +1671,7 @@ class SP5Database:
             'DATE': date,
             'TEXT1': text[:252] if text else '',
             'TEXT2': text2[:252] if text2 else '',
-            'RESERVED': '',
+            'RESERVED': category[:20] if category else '',
         }
         append_record(filepath, fields, record)
         return {
@@ -1679,6 +1680,7 @@ class SP5Database:
             'date': date,
             'text1': text,
             'text2': text2,
+            'category': category,
         }
 
     def delete_note(self, note_id: int) -> int:
@@ -1693,7 +1695,7 @@ class SP5Database:
 
     def update_note(self, note_id: int, text1: Optional[str] = None,
                     text2: Optional[str] = None, employee_id: Optional[int] = None,
-                    date: Optional[str] = None) -> Optional[Dict]:
+                    date: Optional[str] = None, category: Optional[str] = None) -> Optional[Dict]:
         """Update fields of an existing note."""
         filepath = self._table('NOTE')
         fields = get_table_fields(filepath)
@@ -1709,6 +1711,8 @@ class SP5Database:
             update_data['EMPLOYEEID'] = employee_id
         if date is not None:
             update_data['DATE'] = date
+        if category is not None:
+            update_data['RESERVED'] = category[:20]
         update_record(filepath, fields, raw_idx, update_data)
         # Return updated record
         _, updated = self._find_record('NOTE', note_id)
@@ -1719,6 +1723,7 @@ class SP5Database:
                 'date': updated.get('DATE', ''),
                 'text1': updated.get('TEXT1', ''),
                 'text2': updated.get('TEXT2', ''),
+                'category': (updated.get('RESERVED') or '').strip(),
             }
         return None
 
