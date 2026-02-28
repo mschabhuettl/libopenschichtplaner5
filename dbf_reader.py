@@ -79,11 +79,18 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
     """
     Read a .DBF file and return a list of records as dicts.
     String fields are decoded as UTF-16 LE (as used by Schichtplaner5).
+
+    Returns an empty list if the file does not exist, is unreadable, or is
+    corrupted — callers should treat an empty result as "no data" and not
+    crash.
     """
-    if not os.path.exists(filepath):
+    try:
+        open_file = open(filepath, 'rb')
+    except OSError:
+        # File missing, no permissions, or deleted between exists-check and open
         return []
 
-    with open(filepath, 'rb') as f:
+    with open_file as f:
         # Read header (32 bytes)
         header = f.read(32)
         if len(header) < 32:
@@ -163,9 +170,11 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
 
 def get_table_fields(filepath: str) -> List[Dict[str, Any]]:
     """Return field definitions for a .DBF file."""
-    if not os.path.exists(filepath):
+    try:
+        open_file = open(filepath, 'rb')
+    except OSError:
         return []
-    with open(filepath, 'rb') as f:
+    with open_file as f:
         f.read(32)
         fields = []
         while True:

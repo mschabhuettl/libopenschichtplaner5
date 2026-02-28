@@ -335,10 +335,20 @@ def find_all_records(
     if fields is None:
         fields = get_table_fields(filepath)
 
-    num_records, header_size, record_size = _read_header_info(filepath)
+    try:
+        num_records, header_size, record_size = _read_header_info(filepath)
+    except (FileNotFoundError, OSError, ValueError):
+        # File removed or corrupted between the exists-check and open
+        return []
+
     results: List[Tuple[int, Dict]] = []
 
-    with open(filepath, 'rb') as f:
+    try:
+        open_file = open(filepath, 'rb')
+    except OSError:
+        return []
+
+    with open_file as f:
         # Shared (read) lock
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:

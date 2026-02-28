@@ -42,7 +42,12 @@ class SP5Database:
         if cached is not None and cached[0] == mtime:
             return cached[1]
 
-        data = read_dbf(path)
+        try:
+            data = read_dbf(path)
+        except Exception:
+            # Corrupted or temporarily unreadable file — return empty list
+            # but do NOT cache, so the next request retries the read.
+            return []
         _GLOBAL_DBF_CACHE[key] = (mtime, data)
         return data
 
