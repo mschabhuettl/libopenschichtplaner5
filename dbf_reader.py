@@ -4,7 +4,6 @@ Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
 import struct
 import os
-from datetime import date
 from typing import List, Dict, Any, Optional
 
 

@@ -4148,7 +4148,7 @@ class SP5Database:
 
         # Build employee + group info
         employees = self.get_employees(include_hidden=False)
-        emp_map = {e['ID']: e for e in employees}
+        {e['ID']: e for e in employees}
 
         # Group membership per employee
         emp_group: Dict[int, str] = {}
@@ -4348,7 +4348,7 @@ class SP5Database:
 
         Adds a 'weekday_offset' (0=Mon..6=Sun) and 'source_date' field to each entry.
         """
-        from datetime import date as _date, timedelta as _td
+        from datetime import date as _date
         from calendar import monthrange as _mr
 
         days_in_month = _mr(year, month)[1]

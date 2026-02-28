@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
-from .dbf_reader import _decode_string, _parse_date, read_dbf, get_table_fields
+from .dbf_reader import _decode_string, _parse_date, get_table_fields
 
 
 # ─── string / field encoding ──────────────────────────────────────────────────
@@ -120,6 +120,8 @@ def _encode_field(value: Any, field: Dict) -> bytes:
 
 def _read_header_info(filepath: str) -> Tuple[int, int, int]:
     """Return (num_records, header_size, record_size) from the DBF header."""
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"DBF-Datei nicht gefunden: {filepath}")
     with open(filepath, 'rb') as f:
         hdr = f.read(32)
     if len(hdr) < 32:
