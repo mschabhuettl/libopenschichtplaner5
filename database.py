@@ -1307,19 +1307,17 @@ class SP5Database:
         shifts_map = {s['ID']: s for s in self.get_shifts(include_hidden=True)}
         lt_map = {lt['ID']: lt for lt in self.get_leave_types(include_hidden=True)}
 
-        # Build employee→primary group mapping
+        # Build employee→primary group mapping (use get_all_group_members to avoid N+1)
         groups_all = self.get_groups()
         emp_group: Dict[int, str] = {}
         emp_group_id: Dict[int, int] = {}
+        all_gm = self.get_all_group_members()  # {group_id: [employee_ids]}
         for grp in groups_all:
-            try:
-                members = self.get_group_members(grp['ID'])
-                for mid in members:
-                    if mid not in emp_group:
-                        emp_group[mid] = grp.get('NAME', '')
-                        emp_group_id[mid] = grp['ID']
-            except Exception:
-                pass
+            gid = grp['ID']
+            for mid in all_gm.get(gid, []):
+                if mid not in emp_group:
+                    emp_group[mid] = grp.get('NAME', '')
+                    emp_group_id[mid] = gid
 
         prefix = f"{year:04d}-{month:02d}"
         num_days = calendar.monthrange(year, month)[1]
