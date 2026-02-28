@@ -10,6 +10,11 @@ from .dbf_reader import read_dbf, get_table_fields
 from .color_utils import bgr_to_hex, is_light_color
 from .dbf_writer import append_record, delete_record, find_all_records, update_record
 
+# ── Global cross-request DBF cache ──────────────────────────────
+# Maps (db_path, table_name) → (mtime, data)
+# Avoids re-reading unchanged DBF files across requests.
+_GLOBAL_DBF_CACHE: Dict[tuple, tuple] = {}
+
 
 class SP5Database:
     def __init__(self, db_path: str):
@@ -19,17 +24,37 @@ class SP5Database:
         return os.path.join(self.db_path, f"5{name}.DBF")
 
     def _read(self, name: str) -> List[Dict[str, Any]]:
-        """Read a DBF table, using an in-instance cache to avoid repeated file reads."""
-        if not hasattr(self, '_read_cache'):
-            self._read_cache: dict = {}
-        if name not in self._read_cache:
-            self._read_cache[name] = read_dbf(self._table(name))
-        return self._read_cache[name]
+        """Read a DBF table, using a global mtime-based cache.
+
+        The cache is shared across all requests and instances for the same
+        db_path. Data is refreshed automatically when the file changes on disk
+        (mtime check), so write operations are picked up without manual
+        invalidation — while read-heavy workloads avoid redundant disk I/O.
+        """
+        path = self._table(name)
+        key = (self.db_path, name)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+
+        cached = _GLOBAL_DBF_CACHE.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+        data = read_dbf(path)
+        _GLOBAL_DBF_CACHE[key] = (mtime, data)
+        return data
 
     def _invalidate_cache(self, name: str) -> None:
-        """Invalidate the read cache for a table after a write operation."""
-        if hasattr(self, '_read_cache') and name in self._read_cache:
-            del self._read_cache[name]
+        """Invalidate the global cache for a table after a write operation.
+
+        Usually not needed because _read() re-checks mtime automatically,
+        but explicit invalidation is useful when the file is written and
+        immediately re-read within the same OS tick (mtime granularity).
+        """
+        key = (self.db_path, name)
+        _GLOBAL_DBF_CACHE.pop(key, None)
 
     def _color_fields(self, record: Dict) -> Dict:
         """Convert BGR color fields to hex strings."""
