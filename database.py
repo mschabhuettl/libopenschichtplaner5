@@ -766,13 +766,15 @@ class SP5Database:
         employee_ids: list = None,
         force: bool = False,
         dry_run: bool = False,
+        respect_restrictions: bool = True,
     ) -> dict:
         """
         Befüllt den Dienstplan für year/month aus den Schichtmodell-Zuweisungen.
         employee_ids: None = alle MAs mit Zyklus-Zuweisung, sonst nur diese
         force: True = bestehende Einträge überschreiben
         dry_run: True = nur Vorschau (nichts wird geschrieben)
-        Gibt zurück: {'created': N, 'skipped': N, 'errors': [...], 'preview': [...]}
+        respect_restrictions: True = Schicht-Sperren aus RESTR beachten
+        Gibt zurück: {'created': N, 'skipped': N, 'skipped_restriction': N, 'errors': [...], 'preview': [...], 'report': {...}}
         """
         from datetime import date as _date
         import calendar as _cal
@@ -784,7 +786,7 @@ class SP5Database:
             all_assignments = [a for a in all_assignments if a['employee_id'] in emp_id_set]
 
         if not all_assignments:
-            return {'created': 0, 'skipped': 0, 'errors': []}
+            return {'created': 0, 'skipped': 0, 'skipped_restriction': 0, 'errors': [], 'preview': [], 'report': {}}
 
         # Build cycle lookup: cycle_id -> cycle record
         cycles_raw = self._read('CYCLE')
@@ -815,11 +817,28 @@ class SP5Database:
                     if eid is not None:
                         existing_entries.add((eid, d))
 
+        # Build restrictions lookup: (employee_id, shift_id, weekday) -> True
+        # weekday 0 = all days, 1-7 = Mon-Sun
+        restrictions: set = set()  # (employee_id, shift_id, weekday)
+        if respect_restrictions:
+            try:
+                for r in self._read('RESTR'):
+                    eid = r.get('EMPLOYEEID')
+                    sid = r.get('SHIFTID')
+                    wday = r.get('WEEKDAY', 0) or 0
+                    if eid is not None and sid:
+                        restrictions.add((eid, sid, wday))
+            except Exception:
+                pass
+
         num_days = _cal.monthrange(year, month)[1]
         created = 0
         skipped = 0
+        skipped_restriction = 0
         errors: list = []
-        preview: list = []  # List of {employee_id, date, shift_id, status: 'new'|'skip'|'overwrite'}
+        preview: list = []  # List of {employee_id, date, shift_id, status: 'new'|'skip'|'overwrite'|'restricted'}
+        # Per-employee stats for optimization report
+        emp_stats: dict = {}  # emp_id -> {'total': 0, 'weekend': 0, 'night': 0}
 
         # Build employee name lookup for preview
         try:
@@ -828,10 +847,21 @@ class SP5Database:
         except Exception:
             emp_names = {}
 
-        # Build shift name lookup for preview
+        # Build shift name lookup for preview + identify night shifts
+        night_shift_ids: set = set()
         try:
             shifts_raw = self._read('SHIFT')
             shift_names = {s.get('ID'): s.get('SHORTNAME', '') or s.get('NAME', '') for s in shifts_raw}
+            for s in shifts_raw:
+                t = s.get('STARTEND0', '') or ''
+                if '-' in t:
+                    start_t = t.split('-')[0].strip()
+                    try:
+                        h = int(start_t.split(':')[0])
+                        if h >= 20 or h < 6:
+                            night_shift_ids.add(s.get('ID'))
+                    except Exception:
+                        pass
         except Exception:
             shift_names = {}
 
@@ -879,6 +909,25 @@ class SP5Database:
                     # No shift defined for this position (Frei / day off) → skip
                     continue
 
+                # Check restrictions: weekday 0=all, 1=Mon...7=Sun (iso_weekday 1-7)
+                if respect_restrictions and restrictions:
+                    iso_wd = target_date.isoweekday()  # 1=Mon, 7=Sun
+                    restricted = (
+                        (emp_id, shift_id, 0) in restrictions or
+                        (emp_id, shift_id, iso_wd) in restrictions
+                    )
+                    if restricted:
+                        skipped_restriction += 1
+                        preview.append({
+                            'employee_id': emp_id,
+                            'employee_name': emp_names.get(emp_id, f'MA {emp_id}'),
+                            'date': date_str,
+                            'shift_id': shift_id,
+                            'shift_name': shift_names.get(shift_id, str(shift_id)),
+                            'status': 'restricted',
+                        })
+                        continue
+
                 key = (emp_id, date_str)
                 if key in existing_entries:
                     if not force:
@@ -918,6 +967,21 @@ class SP5Database:
                         'status': 'new',
                     })
 
+                # Track stats for optimization report
+                if emp_id not in emp_stats:
+                    emp_stats[emp_id] = {
+                        'employee_id': emp_id,
+                        'name': emp_names.get(emp_id, f'MA {emp_id}'),
+                        'total': 0,
+                        'weekend': 0,
+                        'night': 0,
+                    }
+                emp_stats[emp_id]['total'] += 1
+                if target_date.weekday() >= 5:
+                    emp_stats[emp_id]['weekend'] += 1
+                if shift_id in night_shift_ids:
+                    emp_stats[emp_id]['night'] += 1
+
                 if not dry_run:
                     try:
                         self.add_schedule_entry(emp_id, date_str, shift_id)
@@ -930,7 +994,38 @@ class SP5Database:
                     if key not in existing_entries:
                         created += 1
 
-        return {'created': created, 'skipped': skipped, 'errors': errors, 'preview': preview}
+        # Build optimization report
+        report_employees = sorted(emp_stats.values(), key=lambda x: -x['total'])
+        report: dict = {
+            'employees': report_employees,
+            'skipped_restriction': skipped_restriction,
+        }
+        if len(report_employees) >= 2:
+            import statistics as _stats
+            totals = [e['total'] for e in report_employees]
+            weekends = [e['weekend'] for e in report_employees]
+            nights = [e['night'] for e in report_employees]
+            report['std_total'] = round(_stats.stdev(totals), 2) if len(totals) > 1 else 0
+            report['std_weekend'] = round(_stats.stdev(weekends), 2) if len(weekends) > 1 else 0
+            report['std_night'] = round(_stats.stdev(nights), 2) if len(nights) > 1 else 0
+            # Gini coefficient for total shifts
+            n = len(totals)
+            mean = sum(totals) / n
+            if mean > 0:
+                gini = sum(abs(a - b) for a in totals for b in totals) / (2 * n * n * mean)
+            else:
+                gini = 0.0
+            report['gini'] = round(gini, 4)
+            report['fairness_label'] = 'sehr gut' if gini < 0.05 else ('gut' if gini < 0.1 else ('mittel' if gini < 0.2 else 'schlecht'))
+
+        return {
+            'created': created,
+            'skipped': skipped,
+            'skipped_restriction': skipped_restriction,
+            'errors': errors,
+            'preview': preview,
+            'report': report,
+        }
 
     # ── Staffing requirements ─────────────────────────────────
     def get_staffing(self, year: int, month: int) -> List[Dict]:
