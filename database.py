@@ -1886,7 +1886,7 @@ class SP5Database:
         rows = self._read(table_name)
         return max((r.get('ID', 0) or 0 for r in rows), default=0) + 1
 
-    def _find_record(self, table_name: str, record_id: int):
+    def _find_record(self, table_name: str, record_id: int) -> tuple[int | None, dict | None]:
         """Return (raw_index, record) for the record with given ID, or (None, None)."""
         filepath = self._table(table_name)
         fields = get_table_fields(filepath)
@@ -2461,7 +2461,7 @@ class SP5Database:
 
     def _time_window_overlap_minutes(self, s1: int, e1: int, s2: int, e2: int) -> int:
         """Calculate overlap in minutes between two time windows (may wrap overnight)."""
-        def intervals(start: int, end: int):
+        def intervals(start: int, end: int) -> list[tuple[int, int]]:
             return [(start, end)] if start <= end else [(start, 1440), (0, end)]
         total = 0
         for a_s, a_e in intervals(s1, e1):
@@ -2469,7 +2469,7 @@ class SP5Database:
                 total += self._interval_overlap_minutes(a_s, a_e, b_s, b_e)
         return total
 
-    def _get_shift_time_range(self, shift: Dict, weekday: int):
+    def _get_shift_time_range(self, shift: Dict, weekday: int) -> tuple[int | None, int | None, float]:
         """Return (start_min, end_min, duration_h) for a shift on given weekday."""
         raw = shift.get(f'STARTEND{weekday}', '')
         decoded = self._decode_startend(raw)
@@ -4512,7 +4512,7 @@ class SP5Database:
         except Exception:
             return []
 
-    def _save_swap_requests(self, entries: List[Dict]):
+    def _save_swap_requests(self, entries: List[Dict]) -> None:
         path = self._swap_requests_path()
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
