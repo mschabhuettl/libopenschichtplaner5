@@ -3,12 +3,15 @@ High-level database access for Schichtplaner5 .DBF files.
 """
 import os
 import json
+import logging
 import calendar
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .dbf_reader import read_dbf, get_table_fields
 from .color_utils import bgr_to_hex, is_light_color
 from .dbf_writer import append_record, delete_record, find_all_records, update_record
+
+_db_logger = logging.getLogger("sp5api")
 
 # ── Global cross-request DBF cache ──────────────────────────────
 # Maps (db_path, table_name) → (mtime, data)
@@ -44,9 +47,10 @@ class SP5Database:
 
         try:
             data = read_dbf(path)
-        except Exception:
+        except Exception as _exc:
             # Corrupted or temporarily unreadable file — return empty list
             # but do NOT cache, so the next request retries the read.
+            _db_logger.error("DBF read error: table=%s path=%s error=%s", name, path, _exc)
             return []
         _GLOBAL_DBF_CACHE[key] = (mtime, data)
         return data
