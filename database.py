@@ -763,9 +763,30 @@ class SP5Database:
         return {"ID": cycle_id, "name": name, "weeks": size_weeks}
 
     def delete_shift_cycle(self, cycle_id: int) -> int:
-        """Delete a shift cycle from 5CYCLE and all its entries from 5CYENT."""
+        """Delete a shift cycle from 5CYCLE and all its entries from 5CYENT and 5CYASS."""
         # Delete cycle entries first
         self.clear_cycle_entries(cycle_id)
+        # Cascade: remove employee assignments that reference this cycle
+        cyass_path = self._table("CYASS")
+        cyass_fields = get_table_fields(cyass_path)
+        cyass_matches = find_all_records(cyass_path, cyass_fields, CYCLEID=cycle_id)
+        for idx, _ in reversed(cyass_matches):
+            delete_record(cyass_path, cyass_fields, idx)
+        # Cascade: remove cycle exceptions referencing this cycle (via CYASS IDs no longer valid)
+        # We delete by CYCLEID if the field exists, otherwise best-effort
+        try:
+            cyexc_path = self._table("CYEXC")
+            cyexc_fields = get_table_fields(cyexc_path)
+            # CycleExceptions reference cycle_assignment_id, not cycle_id directly
+            # After removing CYASS entries the exceptions are orphaned; clean them up too
+            assignment_ids = {rec.get("ID") for _, rec in cyass_matches}
+            if assignment_ids:
+                all_exc = find_all_records(cyexc_path, cyexc_fields)
+                for idx, rec in reversed(all_exc):
+                    if rec.get("CYASSID") in assignment_ids:
+                        delete_record(cyexc_path, cyexc_fields, idx)
+        except Exception:
+            pass  # CYEXC table may not exist in all deployments
         # Delete the cycle record
         raw_idx, _ = self._find_record("CYCLE", cycle_id)
         if raw_idx is None:
@@ -2344,13 +2365,19 @@ class SP5Database:
         return {"id": group_id, **update_data}
 
     def delete_group(self, group_id: int) -> int:
-        """Delete a group by ID."""
+        """Soft-delete a group and cascade-remove its member assignments (GRASG)."""
         filepath = self._table("GROUP")
         fields = get_table_fields(filepath)
         raw_idx, _ = self._find_record("GROUP", group_id)
         if raw_idx is None:
             return 0
         update_record(filepath, fields, raw_idx, {"HIDE": 1})
+        # Cascade: remove group membership entries
+        grasg_path = self._table("GRASG")
+        grasg_fields = get_table_fields(grasg_path)
+        grasg_matches = find_all_records(grasg_path, grasg_fields, GROUPID=group_id)
+        for idx, _ in reversed(grasg_matches):
+            delete_record(grasg_path, grasg_fields, idx)
         return 1
 
     def add_group_member(self, group_id: int, employee_id: int) -> dict:
@@ -2468,6 +2495,19 @@ class SP5Database:
         update_record(filepath, fields, raw_idx, update_data)
         return {"id": shift_id, **update_data}
 
+    def shift_active_usage_count(self, shift_id: int) -> int:
+        """Return number of active MASHI records that reference this shift_id."""
+        count = 0
+        for table in ("MASHI", "SPSHI"):
+            try:
+                filepath = self._table(table)
+                fields = get_table_fields(filepath)
+                matches = find_all_records(filepath, fields, SHIFTID=shift_id)
+                count += len(matches)
+            except Exception:
+                pass
+        return count
+
     def hide_shift(self, shift_id: int) -> int:
         filepath = self._table("SHIFT")
         fields = get_table_fields(filepath)
@@ -2522,6 +2562,16 @@ class SP5Database:
                 update_data[key] = data[key]
         update_record(filepath, fields, raw_idx, update_data)
         return {"id": lt_id, **update_data}
+
+    def leave_type_active_usage_count(self, lt_id: int) -> int:
+        """Return number of ABSEN records that reference this leave type."""
+        try:
+            filepath = self._table("ABSEN")
+            fields = get_table_fields(filepath)
+            matches = find_all_records(filepath, fields, LEAVETYPID=lt_id)
+            return len(matches)
+        except Exception:
+            return 0
 
     def hide_leave_type(self, lt_id: int) -> int:
         filepath = self._table("LEAVT")
