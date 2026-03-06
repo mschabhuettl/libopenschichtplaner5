@@ -3302,13 +3302,29 @@ class SP5Database:
             "details": details,
         }
 
+    def check_annual_close_exists(self, year: int, group_id: Optional[int] = None) -> bool:
+        """Check if annual close for year+1 already has data (idempotenz guard)."""
+        employees = self.get_employees(include_hidden=False)
+        if group_id is not None:
+            member_ids = set(self.get_group_members(group_id))
+            employees = [e for e in employees if e["ID"] in member_ids]
+        next_year = year + 1
+        for emp in employees[:3]:  # check first few employees only
+            rows = self._read("LEAEN")
+            for r in rows:
+                if r.get("EMPLOYEEID") == emp["ID"] and r.get("YEAR") == next_year:
+                    return True
+        return False
+
     def run_annual_close(
         self, year: int, group_id: Optional[int] = None, carry_forward_days: float = 10
     ) -> Dict:
         """
         Run annual close: calculate remaining vacation, set carry_forward for year+1.
-        Returns summary with { processed, total_carry_forward, total_forfeited }.
+        Returns summary with { processed, total_carry_forward, total_forfeited, already_existed }.
+        NOTE: Not fully atomic — partial failures may leave some employees processed and others not.
         """
+        already_existed = self.check_annual_close_exists(year, group_id)
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
@@ -3360,6 +3376,7 @@ class SP5Database:
             "processed": processed,
             "total_carry_forward": total_carry,
             "total_forfeited": total_forfeited,
+            "already_existed": already_existed,
             "details": details,
         }
 
