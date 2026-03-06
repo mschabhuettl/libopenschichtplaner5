@@ -226,12 +226,28 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
             else:
                 f.seek(0, 2)  # append after whatever is there
 
-        f.write(row_bytes)
-        f.write(b"\x1a")  # re-append EOF marker
+        write_pos = f.tell()  # remember rollback point
+        try:
+            f.write(row_bytes)
+            f.write(b"\x1a")  # re-append EOF marker
 
-        new_count = num_records + 1
-        _update_record_count(f, new_count)
-        _stamp_header(f)
+            new_count = num_records + 1
+            _update_record_count(f, new_count)
+            _stamp_header(f)
+        except Exception:
+            # Attempt rollback: truncate back to pre-write state so the file
+            # is not left partially written (e.g. on disk-full errors).
+            try:
+                f.truncate(write_pos)
+                f.flush()
+            except Exception as trunc_err:
+                logger.error(
+                    "DBF rollback failed after write error — file may be corrupted: "
+                    "%s (truncate error: %s)",
+                    filepath,
+                    trunc_err,
+                )
+            raise
 
     return new_count
 

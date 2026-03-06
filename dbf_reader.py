@@ -183,7 +183,9 @@ def get_table_fields(filepath: str) -> List[Dict[str, Any]]:
     except OSError:
         return []
     with open_file as f:
-        f.read(32)
+        hdr = f.read(32)
+        if len(hdr) < 32:
+            return []  # empty or truncated file
         fields = []
         while True:
             field_data = f.read(32)
