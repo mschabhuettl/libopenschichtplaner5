@@ -1510,11 +1510,20 @@ class SP5Database:
         vacation_used: Dict[int, int] = {}  # employee_id -> count of vacation days
         sick_days: Dict[int, int] = {}  # employee_id -> count of sick days
 
-        for r in self._read("MASHI"):
+        # Pre-collect absence dates so shift hours on absence days are excluded
+        absence_date_set: set = set()  # (employee_id, date_str)
+        for r in self._read("ABSEN"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
                 eid = r.get("EMPLOYEEID")
                 if eid:
+                    absence_date_set.add((eid, d[:10]))
+
+        for r in self._read("MASHI"):
+            d = r.get("DATE", "")
+            if d and d.startswith(prefix):
+                eid = r.get("EMPLOYEEID")
+                if eid and (eid, d[:10]) not in absence_date_set:
                     sid = r.get("SHIFTID")
                     hrs = 0.0
                     if sid and sid in shifts_map:
@@ -1528,7 +1537,7 @@ class SP5Database:
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
                 eid = r.get("EMPLOYEEID")
-                if eid:
+                if eid and (eid, d[:10]) not in absence_date_set:
                     hrs = float(r.get("DURATION", 0) or 0)
                     shift_hours[eid] = shift_hours.get(eid, 0.0) + hrs
                     shifts_count[eid] = shifts_count.get(eid, 0) + 1
@@ -1542,8 +1551,9 @@ class SP5Database:
                     ltid = r.get("LEAVETYPID")
                     if ltid and ltid in lt_map:
                         lt = lt_map[ltid]
-                        # Vacation: ENTITLED=1 or CHARGETYP=1
-                        if lt.get("ENTITLED") or lt.get("CHARGETYP") == 1:
+                        # Vacation: only ENTITLED=1 types count against leave quota
+                        # (CHARGETYP=1 alone, e.g. Krankheit, must NOT count as vacation)
+                        if lt.get("ENTITLED"):
                             vacation_used[eid] = vacation_used.get(eid, 0) + 1
                         # Sick: detect by name keyword
                         lt_name = (lt.get("NAME", "") or "").lower()
