@@ -87,6 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_groups_super ON groups(super_id);
 # Adapter class
 # ---------------------------------------------------------------------------
 
+
 class SP5SQLiteAdapter:
     """Thin SQLite layer mirroring the three core DBF tables."""
 
@@ -131,6 +132,7 @@ class SP5SQLiteAdapter:
         except ImportError:
             # Allow running adapter standalone (e.g. for testing)
             import sys
+
             sys.path.insert(0, os.path.dirname(__file__))
             from dbf_reader import read_dbf  # type: ignore[no-redef]
 
@@ -143,6 +145,7 @@ class SP5SQLiteAdapter:
                 return []
 
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc).isoformat()
 
         def _date(val) -> Optional[str]:
@@ -157,8 +160,8 @@ class SP5SQLiteAdapter:
             return None
 
         employees = _dbf("EMPL")
-        groups    = _dbf("GROUP")
-        bookings  = _dbf("BOOK")
+        groups = _dbf("GROUP")
+        bookings = _dbf("BOOK")
 
         conn = self._connect()
         try:
@@ -196,7 +199,8 @@ class SP5SQLiteAdapter:
                         1,
                         now,
                     )
-                    for r in employees if r.get("ID")
+                    for r in employees
+                    if r.get("ID")
                 ],
             )
 
@@ -216,7 +220,8 @@ class SP5SQLiteAdapter:
                         1 if r.get("HIDE") else 0,
                         now,
                     )
-                    for r in groups if r.get("ID")
+                    for r in groups
+                    if r.get("ID")
                 ],
             )
 
@@ -236,7 +241,8 @@ class SP5SQLiteAdapter:
                         str(r.get("NOTE") or "").strip(),
                         now,
                     )
-                    for r in bookings if r.get("ID")
+                    for r in bookings
+                    if r.get("ID")
                 ],
             )
             conn.execute("COMMIT")
@@ -249,8 +255,8 @@ class SP5SQLiteAdapter:
 
         counts = {
             "employees": len(employees),
-            "groups":    len(groups),
-            "bookings":  len(bookings),
+            "groups": len(groups),
+            "bookings": len(bookings),
         }
         _log.info("Sync complete: %s", counts)
         return counts
