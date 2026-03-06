@@ -1872,6 +1872,7 @@ class SP5Database:
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
+        self._invalidate_cache("MASHI")
         return record
 
     # ── Write: delete schedule entry ──────────────────────────
@@ -1887,6 +1888,8 @@ class SP5Database:
             for idx, _ in matches:
                 delete_record(filepath, fields, idx)
                 count += 1
+        for table in ["MASHI", "SPSHI", "ABSEN"]:
+            self._invalidate_cache(table)
         return count
 
     def delete_shift_only(self, employee_id: int, date_str: str) -> int:
@@ -2335,6 +2338,7 @@ class SP5Database:
             if key in field_names and key in data and data[key] is not None:
                 record[key] = data[key]
         append_record(filepath, fields, record)
+        self._invalidate_cache("GROUP")
         return {**record, "id": new_id}
 
     def update_group(self, group_id: int, data: dict) -> dict:
@@ -2362,6 +2366,7 @@ class SP5Database:
             if key in data and data[key] is not None and key in field_names:
                 update_data[key] = data[key]
         update_record(filepath, fields, raw_idx, update_data)
+        self._invalidate_cache("GROUP")
         return {"id": group_id, **update_data}
 
     def delete_group(self, group_id: int) -> int:
@@ -2460,6 +2465,7 @@ class SP5Database:
         ):
             record["STARTEND0"] = data["STARTEND0"]
         append_record(filepath, fields, record)
+        self._invalidate_cache("SHIFT")
         return {**record, "id": new_id}
 
     def update_shift(self, shift_id: int, data: dict) -> dict:
@@ -2493,6 +2499,7 @@ class SP5Database:
             if sk in data and sk in field_names:
                 update_data[sk] = data[sk]
         update_record(filepath, fields, raw_idx, update_data)
+        self._invalidate_cache("SHIFT")
         return {"id": shift_id, **update_data}
 
     def shift_active_usage_count(self, shift_id: int) -> int:
@@ -2515,6 +2522,7 @@ class SP5Database:
         if raw_idx is None:
             return 0
         update_record(filepath, fields, raw_idx, {"HIDE": 1})
+        self._invalidate_cache("SHIFT")
         return 1
 
     # ── Write: Leave Types ────────────────────────────────────
@@ -2595,6 +2603,7 @@ class SP5Database:
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
+        self._invalidate_cache("HOLID")
         return {**record, "id": new_id}
 
     def update_holiday(self, holiday_id: int, data: dict) -> dict:
@@ -2608,6 +2617,7 @@ class SP5Database:
             if key in data:
                 update_data[key] = data[key]
         update_record(filepath, fields, raw_idx, update_data)
+        self._invalidate_cache("HOLID")
         return {"id": holiday_id, **update_data}
 
     def delete_holiday(self, holiday_id: int) -> int:
@@ -2617,6 +2627,7 @@ class SP5Database:
         if raw_idx is None:
             return 0
         delete_record(filepath, fields, raw_idx)
+        self._invalidate_cache("HOLID")
         return 1
 
     # ── Write: Workplaces ─────────────────────────────────────
