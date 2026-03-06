@@ -6,6 +6,7 @@ import os
 import json
 import logging
 import calendar
+import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from .dbf_reader import read_dbf, get_table_fields
@@ -17,7 +18,10 @@ _db_logger = logging.getLogger("sp5api")
 # ── Global cross-request DBF cache ──────────────────────────────
 # Maps (db_path, table_name) → (mtime, data)
 # Avoids re-reading unchanged DBF files across requests.
+# RLock (re-entrant) because _read() and _invalidate_cache() may be called
+# from the same thread (e.g. write path calls _invalidate_cache then _read).
 _GLOBAL_DBF_CACHE: Dict[tuple, tuple] = {}
+_CACHE_LOCK = threading.RLock()
 
 
 class SP5Database:
@@ -42,9 +46,10 @@ class SP5Database:
         except OSError:
             mtime = 0.0
 
-        cached = _GLOBAL_DBF_CACHE.get(key)
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
+        with _CACHE_LOCK:
+            cached = _GLOBAL_DBF_CACHE.get(key)
+            if cached is not None and cached[0] == mtime:
+                return cached[1]
 
         try:
             data = read_dbf(path)
@@ -55,7 +60,9 @@ class SP5Database:
                 "DBF read error: table=%s path=%s error=%s", name, path, _exc
             )
             return []
-        _GLOBAL_DBF_CACHE[key] = (mtime, data)
+
+        with _CACHE_LOCK:
+            _GLOBAL_DBF_CACHE[key] = (mtime, data)
         return data
 
     def _invalidate_cache(self, name: str) -> None:
@@ -66,7 +73,8 @@ class SP5Database:
         immediately re-read within the same OS tick (mtime granularity).
         """
         key = (self.db_path, name)
-        _GLOBAL_DBF_CACHE.pop(key, None)
+        with _CACHE_LOCK:
+            _GLOBAL_DBF_CACHE.pop(key, None)
 
     def _color_fields(self, record: Dict) -> Dict:
         """Convert BGR color fields to hex strings."""
