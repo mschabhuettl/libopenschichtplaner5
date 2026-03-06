@@ -2,6 +2,7 @@
 Pure Python DBF/dBASE reader for Schichtplaner5 databases.
 Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
+
 import struct
 from typing import List, Dict, Any, Optional
 
@@ -27,15 +28,15 @@ def _is_utf16_le(raw: bytes) -> bool:
 def _decode_string(raw: bytes) -> str:
     """
     Decode a string field from Schichtplaner5 .DBF files.
-    
+
     SP5 uses two different encodings for Character fields:
     - Text fields (NAME, SHORTNAME, etc.): UTF-16 LE, padded with 0x20
     - Data fields (WORKDAYS, STARTEND*, etc.): plain ASCII, padded with 0x20
-    
+
     We detect UTF-16 LE by checking if odd-indexed bytes are 0x00.
     """
     if not raw:
-        return ''
+        return ""
 
     if _is_utf16_le(raw):
         # UTF-16 LE encoded text: find null terminator (0x00 0x00 at even offset)
@@ -46,19 +47,19 @@ def _decode_string(raw: bytes) -> str:
                 break
         chunk = raw[:end]
         if not chunk:
-            return ''
+            return ""
         try:
-            return chunk.decode('utf-16-le').strip()
+            return chunk.decode("utf-16-le").strip()
         except Exception:
             pass
 
     # Plain ASCII / binary data field (WORKDAYS, STARTEND*, etc.)
     # Strip trailing spaces/nulls and decode as latin-1 to preserve all byte values
-    stripped = raw.rstrip(b'\x00\x20')
+    stripped = raw.rstrip(b"\x00\x20")
     try:
-        return stripped.decode('latin-1').strip()
+        return stripped.decode("latin-1").strip()
     except Exception:
-        return raw.split(b'\x00')[0].decode('latin-1', errors='replace').strip()
+        return raw.split(b"\x00")[0].decode("latin-1", errors="replace").strip()
 
 
 def _parse_date(raw: str) -> Optional[str]:
@@ -74,7 +75,7 @@ def _parse_date(raw: str) -> Optional[str]:
     return None
 
 
-def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, Any]]:
+def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, Any]]:
     """
     Read a .DBF file and return a list of records as dicts.
     String fields are decoded as UTF-16 LE (as used by Schichtplaner5).
@@ -84,7 +85,7 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
     crash.
     """
     try:
-        open_file = open(filepath, 'rb')
+        open_file = open(filepath, "rb")
     except OSError:
         # File missing, no permissions, or deleted between exists-check and open
         return []
@@ -95,9 +96,9 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
         if len(header) < 32:
             return []
 
-        num_records = struct.unpack_from('<I', header, 4)[0]
-        header_size = struct.unpack_from('<H', header, 8)[0]
-        record_size = struct.unpack_from('<H', header, 10)[0]
+        num_records = struct.unpack_from("<I", header, 4)[0]
+        header_size = struct.unpack_from("<H", header, 8)[0]
+        record_size = struct.unpack_from("<H", header, 10)[0]
 
         # Read field descriptors (32 bytes each, terminated by 0x0D)
         fields = []
@@ -106,11 +107,16 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
             field_data = f.read(32)
             if not field_data or len(field_data) < 32 or field_data[0] == 0x0D:
                 break
-            name = field_data[0:11].split(b'\x00')[0].decode('ascii', errors='replace').strip()
+            name = (
+                field_data[0:11]
+                .split(b"\x00")[0]
+                .decode("ascii", errors="replace")
+                .strip()
+            )
             ftype = chr(field_data[11])
             flen = field_data[16]
             fdec = field_data[17]
-            fields.append({'name': name, 'type': ftype, 'len': flen, 'dec': fdec})
+            fields.append({"name": name, "type": ftype, "len": flen, "dec": fdec})
 
         # Read records
         f.seek(header_size)
@@ -129,38 +135,38 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
             offset = 1  # skip deletion flag
 
             for field in fields:
-                chunk = raw[offset:offset + field['len']]
-                ftype = field['type']
-                fname = field['name']
+                chunk = raw[offset : offset + field["len"]]
+                ftype = field["type"]
+                fname = field["name"]
 
-                if ftype == 'C':
+                if ftype == "C":
                     # Character field - UTF-16 LE in Schichtplaner5
                     val = _decode_string(chunk)
-                elif ftype == 'D':
+                elif ftype == "D":
                     # Date field YYYYMMDD
-                    val = _parse_date(chunk.decode('ascii', errors='replace'))
-                elif ftype in ('N', 'F'):
+                    val = _parse_date(chunk.decode("ascii", errors="replace"))
+                elif ftype in ("N", "F"):
                     # Numeric/Float
-                    s = chunk.decode('ascii', errors='replace').strip()
-                    if s == '' or s == '.':
+                    s = chunk.decode("ascii", errors="replace").strip()
+                    if s == "" or s == ".":
                         val = 0
                     else:
                         try:
-                            val = float(s) if '.' in s or field['dec'] > 0 else int(s)
+                            val = float(s) if "." in s or field["dec"] > 0 else int(s)
                         except ValueError:
                             val = 0
-                elif ftype == 'L':
+                elif ftype == "L":
                     # Logical
-                    s = chunk.decode('ascii', errors='replace').strip()
-                    val = s in ('T', 't', 'Y', 'y', '1')
-                elif ftype == 'M':
+                    s = chunk.decode("ascii", errors="replace").strip()
+                    val = s in ("T", "t", "Y", "y", "1")
+                elif ftype == "M":
                     # Memo (pointer only in .DBF, actual data in .DBT)
                     val = None
                 else:
-                    val = chunk.decode('ascii', errors='replace').strip()
+                    val = chunk.decode("ascii", errors="replace").strip()
 
                 record[fname] = val
-                offset += field['len']
+                offset += field["len"]
 
             records.append(record)
 
@@ -170,7 +176,7 @@ def read_dbf(filepath: str, encoding_hint: str = 'utf-16-le') -> List[Dict[str, 
 def get_table_fields(filepath: str) -> List[Dict[str, Any]]:
     """Return field definitions for a .DBF file."""
     try:
-        open_file = open(filepath, 'rb')
+        open_file = open(filepath, "rb")
     except OSError:
         return []
     with open_file as f:
@@ -180,9 +186,14 @@ def get_table_fields(filepath: str) -> List[Dict[str, Any]]:
             field_data = f.read(32)
             if not field_data or len(field_data) < 32 or field_data[0] == 0x0D:
                 break
-            name = field_data[0:11].split(b'\x00')[0].decode('ascii', errors='replace').strip()
+            name = (
+                field_data[0:11]
+                .split(b"\x00")[0]
+                .decode("ascii", errors="replace")
+                .strip()
+            )
             ftype = chr(field_data[11])
             flen = field_data[16]
             fdec = field_data[17]
-            fields.append({'name': name, 'type': ftype, 'len': flen, 'dec': fdec})
+            fields.append({"name": name, "type": ftype, "len": flen, "dec": fdec})
     return fields

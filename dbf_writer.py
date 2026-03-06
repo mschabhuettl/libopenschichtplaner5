@@ -34,6 +34,7 @@ from .dbf_reader import _decode_string, _parse_date, get_table_fields
 
 # ─── string / field encoding ──────────────────────────────────────────────────
 
+
 def _encode_string(value: str, field_len: int) -> bytes:
     """
     Encode a Python string to a Schichtplaner5 C field.
@@ -42,16 +43,16 @@ def _encode_string(value: str, field_len: int) -> bytes:
     For an empty string the result is [\\x00\\x00] [\\x20 …].
     """
     if field_len <= 0:
-        return b''
+        return b""
 
     if not value:
         # empty string: just null-terminator + spaces
         if field_len >= 2:
-            return b'\x00\x00' + b'\x20' * (field_len - 2)
+            return b"\x00\x00" + b"\x20" * (field_len - 2)
         # field too short for null-terminator – just fill with nulls
-        return b'\x00' * field_len
+        return b"\x00" * field_len
 
-    encoded = value.encode('utf-16-le')
+    encoded = value.encode("utf-16-le")
 
     # Leave 2 bytes for the null terminator (unless field is too small)
     max_content = max(0, field_len - 2)
@@ -59,76 +60,77 @@ def _encode_string(value: str, field_len: int) -> bytes:
     if len(encoded) > max_content:
         encoded = encoded[: max_content & ~1]
 
-    null_term = b'\x00\x00' if field_len - len(encoded) >= 2 else b''
-    padding   = b'\x20' * (field_len - len(encoded) - len(null_term))
-    result    = encoded + null_term + padding
+    null_term = b"\x00\x00" if field_len - len(encoded) >= 2 else b""
+    padding = b"\x20" * (field_len - len(encoded) - len(null_term))
+    result = encoded + null_term + padding
 
     # Safety: always return exactly field_len bytes
     if len(result) < field_len:
-        result += b'\x20' * (field_len - len(result))
+        result += b"\x20" * (field_len - len(result))
     return result[:field_len]
 
 
 def _encode_field(value: Any, field: Dict) -> bytes:
     """Encode a single value according to its DBF field descriptor."""
-    ftype = field['type']
-    flen  = field['len']
-    fdec  = field['dec']
+    ftype = field["type"]
+    flen = field["len"]
+    fdec = field["dec"]
 
     if value is None:
-        return b' ' * flen
+        return b" " * flen
 
-    if ftype == 'C':
+    if ftype == "C":
         # If bytes are passed directly (e.g. raw binary fields like DIGEST),
         # write them as-is padded to field length.
         if isinstance(value, bytes):
-            return (value + b'\x00' * flen)[:flen]
-        return _encode_string(str(value) if value else '', flen)
+            return (value + b"\x00" * flen)[:flen]
+        return _encode_string(str(value) if value else "", flen)
 
-    elif ftype == 'D':
+    elif ftype == "D":
         # Expects 'YYYY-MM-DD' or 'YYYYMMDD'; pads with spaces if empty
-        s = str(value).strip() if value else ''
-        if len(s) == 10 and s[4] == '-':
-            s = s.replace('-', '')          # YYYY-MM-DD → YYYYMMDD
+        s = str(value).strip() if value else ""
+        if len(s) == 10 and s[4] == "-":
+            s = s.replace("-", "")  # YYYY-MM-DD → YYYYMMDD
         if len(s) == 8 and s.isdigit():
-            return s.encode('ascii').ljust(flen)[:flen]
-        return b' ' * flen
+            return s.encode("ascii").ljust(flen)[:flen]
+        return b" " * flen
 
-    elif ftype in ('N', 'F'):
+    elif ftype in ("N", "F"):
         try:
             if fdec > 0:
                 fmt = f"{{:>{flen}.{fdec}f}}"
-                s   = fmt.format(float(value))
+                s = fmt.format(float(value))
             else:
                 fmt = f"{{:>{flen}d}}"
-                s   = fmt.format(int(float(value)))
+                s = fmt.format(int(float(value)))
         except (ValueError, TypeError):
-            s = ' ' * flen
-        return s.encode('ascii')[:flen]
+            s = " " * flen
+        return s.encode("ascii")[:flen]
 
-    elif ftype == 'L':
-        return b'T' if value else b'F'
+    elif ftype == "L":
+        return b"T" if value else b"F"
 
-    elif ftype == 'M':
-        return b' ' * flen
+    elif ftype == "M":
+        return b" " * flen
 
     else:
-        return str(value).ljust(flen).encode('ascii', errors='replace')[:flen]
+        return str(value).ljust(flen).encode("ascii", errors="replace")[:flen]
 
 
 # ─── header helpers ───────────────────────────────────────────────────────────
+
 
 def _read_header_info(filepath: str) -> Tuple[int, int, int]:
     """Return (num_records, header_size, record_size) from the DBF header."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"DBF-Datei nicht gefunden: {filepath}")
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         hdr = f.read(32)
     if len(hdr) < 32:
         raise ValueError(f"Truncated DBF header: {filepath}")
-    num_records = struct.unpack_from('<I', hdr, 4)[0]
-    header_size = struct.unpack_from('<H', hdr, 8)[0]
-    record_size = struct.unpack_from('<H', hdr, 10)[0]
+    num_records = struct.unpack_from("<I", hdr, 4)[0]
+    header_size = struct.unpack_from("<H", hdr, 8)[0]
+    record_size = struct.unpack_from("<H", hdr, 10)[0]
     return num_records, header_size, record_size
 
 
@@ -142,15 +144,16 @@ def _stamp_header(f) -> None:
 def _update_record_count(f, new_count: int) -> None:
     """Write the new record count at bytes 4-7 of an already-open file."""
     f.seek(4)
-    f.write(struct.pack('<I', new_count))
+    f.write(struct.pack("<I", new_count))
 
 
 # ─── file locking ─────────────────────────────────────────────────────────────
 
+
 @contextmanager
 def _exclusive_open(filepath: str):
     """Open filepath for read+write with an exclusive POSIX lock."""
-    with open(filepath, 'r+b') as f:
+    with open(filepath, "r+b") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
             yield f
@@ -159,6 +162,7 @@ def _exclusive_open(filepath: str):
 
 
 # ─── public API ───────────────────────────────────────────────────────────────
+
 
 def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
     """
@@ -179,15 +183,15 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
         New total record count after appending.
     """
     # Build the raw record bytes (1 active-flag byte + field data)
-    row = bytearray(b'\x20')   # delete-flag: active
+    row = bytearray(b"\x20")  # delete-flag: active
     for field in fields:
-        row += _encode_field(record.get(field['name']), field)
+        row += _encode_field(record.get(field["name"]), field)
 
     num_records, header_size, record_size = _read_header_info(filepath)
 
     # Pad / trim to the exact record_size
     if len(row) < record_size:
-        row += b'\x20' * (record_size - len(row))
+        row += b"\x20" * (record_size - len(row))
     row = bytes(row[:record_size])
 
     with _exclusive_open(filepath) as f:
@@ -195,23 +199,23 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
         # two concurrent appends might both read num_records=N before either
         # acquires the lock, causing both to write new_count=N+1 instead of N+2.
         f.seek(4)
-        num_records = struct.unpack('<I', f.read(4))[0]
+        num_records = struct.unpack("<I", f.read(4))[0]
 
         # Find write position: just before the EOF marker (0x1A) if present
-        f.seek(0, 2)                     # seek to end
+        f.seek(0, 2)  # seek to end
         file_end = f.tell()
 
         # Check whether the very last byte is the EOF marker
         if file_end > 0:
             f.seek(-1, 2)
             last = f.read(1)
-            if last == b'\x1a':
-                f.seek(-1, 2)            # overwrite the marker
+            if last == b"\x1a":
+                f.seek(-1, 2)  # overwrite the marker
             else:
-                f.seek(0, 2)             # append after whatever is there
+                f.seek(0, 2)  # append after whatever is there
 
         f.write(row)
-        f.write(b'\x1a')                 # re-append EOF marker
+        f.write(b"\x1a")  # re-append EOF marker
 
         new_count = num_records + 1
         _update_record_count(f, new_count)
@@ -242,10 +246,10 @@ def delete_record(filepath: str, fields: List[Dict], record_index: int) -> None:
     with _exclusive_open(filepath) as f:
         f.seek(byte_offset)
         current = f.read(1)
-        if current == b'\x2a':
+        if current == b"\x2a":
             return  # already deleted – nothing to do
         f.seek(byte_offset)
-        f.write(b'\x2a')
+        f.write(b"\x2a")
         _stamp_header(f)
 
 
@@ -294,10 +298,10 @@ def update_record(
         # Overwrite only the requested fields
         offset = 1  # skip delete-flag byte
         for field in fields:
-            if field['name'] in data:
-                encoded = _encode_field(data[field['name']], field)
-                raw[offset : offset + field['len']] = encoded
-            offset += field['len']
+            if field["name"] in data:
+                encoded = _encode_field(data[field["name"]], field)
+                raw[offset : offset + field["len"]] = encoded
+            offset += field["len"]
 
         f.seek(byte_offset)
         f.write(bytes(raw))
@@ -344,7 +348,7 @@ def find_all_records(
     results: List[Tuple[int, Dict]] = []
 
     try:
-        open_file = open(filepath, 'rb')
+        open_file = open(filepath, "rb")
     except OSError:
         return []
 
@@ -372,39 +376,40 @@ def find_all_records(
 
 # ─── internal parsing (re-uses dbf_reader helpers) ────────────────────────────
 
+
 def _parse_record(raw: bytes, fields: List[Dict]) -> Dict[str, Any]:
     """Parse a raw record byte-string into a dict using the given field descriptors."""
     record: Dict[str, Any] = {}
     offset = 1  # skip delete-flag
 
     for field in fields:
-        chunk = raw[offset : offset + field['len']]
-        ftype = field['type']
-        fname = field['name']
+        chunk = raw[offset : offset + field["len"]]
+        ftype = field["type"]
+        fname = field["name"]
 
-        if ftype == 'C':
+        if ftype == "C":
             val = _decode_string(chunk)
-        elif ftype == 'D':
-            val = _parse_date(chunk.decode('ascii', errors='replace'))
-        elif ftype in ('N', 'F'):
-            s = chunk.decode('ascii', errors='replace').strip()
-            if not s or s == '.':
+        elif ftype == "D":
+            val = _parse_date(chunk.decode("ascii", errors="replace"))
+        elif ftype in ("N", "F"):
+            s = chunk.decode("ascii", errors="replace").strip()
+            if not s or s == ".":
                 val = 0
             else:
                 try:
-                    val = float(s) if ('.' in s or field['dec'] > 0) else int(s)
+                    val = float(s) if ("." in s or field["dec"] > 0) else int(s)
                 except ValueError:
                     val = 0
-        elif ftype == 'L':
-            s = chunk.decode('ascii', errors='replace').strip()
-            val = s in ('T', 't', 'Y', 'y', '1')
-        elif ftype == 'M':
+        elif ftype == "L":
+            s = chunk.decode("ascii", errors="replace").strip()
+            val = s in ("T", "t", "Y", "y", "1")
+        elif ftype == "M":
             val = None
         else:
-            val = chunk.decode('ascii', errors='replace').strip()
+            val = chunk.decode("ascii", errors="replace").strip()
 
         record[fname] = val
-        offset += field['len']
+        offset += field["len"]
 
     return record
 
