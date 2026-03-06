@@ -194,7 +194,7 @@ class SP5Database:
         for r in rows:
             self._color_fields(r)
             # Parse STARTEND per weekday
-            times = {}
+            times: Dict[int, Any] = {}
             for i in range(7):
                 key = f"STARTEND{i}"
                 val = r.get(key, "").strip()
@@ -203,9 +203,9 @@ class SP5Database:
                     if len(parts) == 2:
                         times[i] = {"start": parts[0].strip(), "end": parts[1].strip()}
                     else:
-                        times[i] = None
+                        times[i] = None  # type: ignore[assignment]
                 else:
-                    times[i] = None
+                    times[i] = None  # type: ignore[assignment]
             r["TIMES_BY_WEEKDAY"] = times
         rows.sort(key=lambda x: x.get("POSITION", 0))
         return rows
@@ -697,7 +697,7 @@ class SP5Database:
             # Build a simple pattern string like "F/F/F/S/S/–/– | S/S/S/F/F/–/–"
             pattern_parts = []
             for week in weeks:
-                part = "/".join(d["shift_short"] or "–" for d in week)
+                part = "/".join(str(d["shift_short"]) if d["shift_short"] else "–" for d in week)  # type: ignore[misc]
                 pattern_parts.append(part)
             pattern = "  |  ".join(pattern_parts)
 
@@ -1686,13 +1686,13 @@ class SP5Database:
         week_set = set(week_dates)
 
         # Build lookup: date -> employee_id -> entry
-        day_entries: Dict[str, Dict[int, Dict]] = {d: {} for d in week_dates}
+        day_entries: Dict[str, Dict[Any, Dict]] = {d: {} for d in week_dates}
 
         for r in self._read("MASHI"):
             d = r.get("DATE", "")
             if d in week_set:
                 eid = r.get("EMPLOYEEID")
-                if eid in allowed_ids:
+                if eid is not None and eid in allowed_ids:
                     day_entries[d][eid] = {
                         "kind": "shift",
                         "shift_id": r.get("SHIFTID"),
@@ -1704,7 +1704,7 @@ class SP5Database:
             d = r.get("DATE", "")
             if d in week_set:
                 eid = r.get("EMPLOYEEID")
-                if eid in allowed_ids:
+                if eid is not None and eid in allowed_ids:
                     day_entries[d][eid] = {
                         "kind": "special_shift",
                         "shift_id": r.get("SHIFTID"),
@@ -1728,7 +1728,7 @@ class SP5Database:
             d = r.get("DATE", "")
             if d in week_set:
                 eid = r.get("EMPLOYEEID")
-                if eid in allowed_ids:
+                if eid is not None and eid in allowed_ids:
                     day_entries[d][eid] = {
                         "kind": "absence",
                         "shift_id": None,
@@ -2073,13 +2073,13 @@ class SP5Database:
         raw_idx, record = self._find_record("NOTE", note_id)
         if raw_idx is None:
             return None
-        update_data = {}
+        update_data: Dict[str, Any] = {}
         if text1 is not None:
             update_data["TEXT1"] = text1[:252]
         if text2 is not None:
             update_data["TEXT2"] = text2[:252]
         if employee_id is not None:
-            update_data["EMPLOYEEID"] = employee_id
+            update_data["EMPLOYEEID"] = employee_id  # type: ignore[assignment]
         if date is not None:
             update_data["DATE"] = date
         if category is not None:
@@ -4810,9 +4810,9 @@ class SP5Database:
         for grp in self.get_groups(include_hidden=False):
             gid = grp.get("ID")
             gname = grp.get("NAME", "")
-            for mid in self.get_group_members(gid):
+            for mid in self.get_group_members(int(gid) if gid is not None else 0):
                 emp_group[mid] = gname
-                emp_group_id[mid] = gid
+                emp_group_id[mid] = int(gid) if gid is not None else 0
 
         # Per-employee: collect sick day dates
         emp_dates: Dict[int, list] = {}

@@ -101,7 +101,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
         record_size = struct.unpack_from("<H", header, 10)[0]
 
         # Read field descriptors (32 bytes each, terminated by 0x0D)
-        fields = []
+        fields: List[Dict[str, Any]] = []
         f.seek(32)
         while True:
             field_data = f.read(32)
@@ -131,14 +131,17 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
             if raw[0] == 0x2A:
                 continue
 
-            record = {}
+            record: Dict[str, Any] = {}
             offset = 1  # skip deletion flag
 
             for field in fields:
-                chunk = raw[offset : offset + field["len"]]
-                ftype = field["type"]
-                fname = field["name"]
+                flen = int(field["len"])
+                ftype = str(field["type"])
+                fname = str(field["name"])
+                fdec = int(field["dec"])
+                chunk = raw[offset : offset + flen]
 
+                val: Any = None
                 if ftype == "C":
                     # Character field - UTF-16 LE in Schichtplaner5
                     val = _decode_string(chunk)
@@ -152,7 +155,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
                         val = 0
                     else:
                         try:
-                            val = float(s) if "." in s or field["dec"] > 0 else int(s)
+                            val = float(s) if "." in s or fdec > 0 else int(s)
                         except ValueError:
                             val = 0
                 elif ftype == "L":
@@ -166,7 +169,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
                     val = chunk.decode("ascii", errors="replace").strip()
 
                 record[fname] = val
-                offset += field["len"]
+                offset += flen
 
             records.append(record)
 

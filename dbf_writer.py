@@ -192,7 +192,7 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
     # Pad / trim to the exact record_size
     if len(row) < record_size:
         row += b"\x20" * (record_size - len(row))
-    row = bytes(row[:record_size])
+    row_bytes: bytes = bytes(row[:record_size])
 
     with _exclusive_open(filepath) as f:
         # Re-read the record count inside the lock to avoid TOCTOU race:
@@ -214,7 +214,7 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
             else:
                 f.seek(0, 2)  # append after whatever is there
 
-        f.write(row)
+        f.write(row_bytes)
         f.write(b"\x1a")  # re-append EOF marker
 
         new_count = num_records + 1
@@ -387,6 +387,7 @@ def _parse_record(raw: bytes, fields: List[Dict]) -> Dict[str, Any]:
         ftype = field["type"]
         fname = field["name"]
 
+        val: Any = None
         if ftype == "C":
             val = _decode_string(chunk)
         elif ftype == "D":
