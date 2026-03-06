@@ -2065,13 +2065,29 @@ class SP5Database:
         existing = read_dbf(filepath)
         max_id = max((r.get("ID", 0) or 0 for r in existing), default=0)
         new_id = max_id + 1
+        # TEXT1/TEXT2: C len=252 bytes, UTF-16-LE → 125 chars max
+        # RESERVED (category): C len=20 bytes → 9 chars max
+        _NOTE_TEXT_MAX = 125
+        _NOTE_CAT_MAX = 9
+        if text and len(text) > _NOTE_TEXT_MAX:
+            raise ValueError(
+                f"text zu lang: {len(text)} Zeichen (max {_NOTE_TEXT_MAX})"
+            )
+        if text2 and len(text2) > _NOTE_TEXT_MAX:
+            raise ValueError(
+                f"text2 zu lang: {len(text2)} Zeichen (max {_NOTE_TEXT_MAX})"
+            )
+        if category and len(category) > _NOTE_CAT_MAX:
+            raise ValueError(
+                f"category zu lang: {len(category)} Zeichen (max {_NOTE_CAT_MAX})"
+            )
         record = {
             "ID": new_id,
             "EMPLOYEEID": employee_id,
             "DATE": date,
-            "TEXT1": text[:252] if text else "",
-            "TEXT2": text2[:252] if text2 else "",
-            "RESERVED": category[:20] if category else "",
+            "TEXT1": text or "",
+            "TEXT2": text2 or "",
+            "RESERVED": category or "",
         }
         append_record(filepath, fields, record)
         return {
@@ -2108,17 +2124,31 @@ class SP5Database:
         raw_idx, record = self._find_record("NOTE", note_id)
         if raw_idx is None:
             return None
+        _NOTE_TEXT_MAX = 125
+        _NOTE_CAT_MAX = 9
         update_data: Dict[str, Any] = {}
         if text1 is not None:
-            update_data["TEXT1"] = text1[:252]
+            if len(text1) > _NOTE_TEXT_MAX:
+                raise ValueError(
+                    f"text1 zu lang: {len(text1)} Zeichen (max {_NOTE_TEXT_MAX})"
+                )
+            update_data["TEXT1"] = text1
         if text2 is not None:
-            update_data["TEXT2"] = text2[:252]
+            if len(text2) > _NOTE_TEXT_MAX:
+                raise ValueError(
+                    f"text2 zu lang: {len(text2)} Zeichen (max {_NOTE_TEXT_MAX})"
+                )
+            update_data["TEXT2"] = text2
         if employee_id is not None:
             update_data["EMPLOYEEID"] = employee_id  # type: ignore[assignment]
         if date is not None:
             update_data["DATE"] = date
         if category is not None:
-            update_data["RESERVED"] = category[:20]
+            if len(category) > _NOTE_CAT_MAX:
+                raise ValueError(
+                    f"category zu lang: {len(category)} Zeichen (max {_NOTE_CAT_MAX})"
+                )
+            update_data["RESERVED"] = category
         update_record(filepath, fields, raw_idx, update_data)
         # Return updated record
         _, updated = self._find_record("NOTE", note_id)

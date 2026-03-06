@@ -23,6 +23,7 @@ Write safety:
 """
 
 import fcntl
+import logging
 import os
 import struct
 from contextlib import contextmanager
@@ -30,6 +31,8 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from .dbf_reader import _decode_string, _parse_date, get_table_fields
+
+logger = logging.getLogger(__name__)
 
 
 # ─── string / field encoding ──────────────────────────────────────────────────
@@ -56,8 +59,17 @@ def _encode_string(value: str, field_len: int) -> bytes:
 
     # Leave 2 bytes for the null terminator (unless field is too small)
     max_content = max(0, field_len - 2)
-    # Truncate at even-byte boundary
+    # Truncate at even-byte boundary – emit a warning so data loss is visible
     if len(encoded) > max_content:
+        max_chars = (max_content & ~1) // 2
+        logger.warning(
+            "DBF field truncation: value '%s...' (%d chars) exceeds field capacity "
+            "(%d chars / %d bytes). Truncating silently.",
+            value[:30],
+            len(value),
+            max_chars,
+            max_content & ~1,
+        )
         encoded = encoded[: max_content & ~1]
 
     null_term = b"\x00\x00" if field_len - len(encoded) >= 2 else b""
