@@ -4772,6 +4772,21 @@ class SP5Database:
                 entries = []
         else:
             entries = []
+        # Prevent duplicate: same employee + date + wish_type already exists
+        existing = next(
+            (
+                e
+                for e in entries
+                if e.get("employee_id") == employee_id
+                and e.get("date") == date
+                and e.get("wish_type") == wish_type
+            ),
+            None,
+        )
+        if existing is not None:
+            raise ValueError(
+                f"Wunsch vom Typ '{wish_type}' für MA {employee_id} am {date} existiert bereits (ID {existing['id']})"
+            )
         max_id = max((e.get("id", 0) for e in entries), default=0)
         entry = {
             "id": max_id + 1,
