@@ -93,23 +93,33 @@ class SP5Database:
 
     # ── Helpers ────────────────────────────────────────────────
     def _count_working_days(
-        self, year: int, month: int, workdays_list: Optional[list] = None
+        self,
+        year: int,
+        month: int,
+        workdays_list: Optional[list] = None,
+        holiday_dates: Optional[set] = None,
     ) -> int:
         """Count working days in a month, using WORKDAYS_LIST when available.
 
         workdays_list: list of 7+ bools [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
         Falls back to Mon-Fri (weekday < 5) if not provided or too short.
+        holiday_dates: set of date strings "YYYY-MM-DD" to exclude from count.
         """
         num_days = calendar.monthrange(year, month)[1]
+        hd = holiday_dates or set()
         if workdays_list and len(workdays_list) >= 7:
             return sum(
                 1
                 for d in range(1, num_days + 1)
                 if workdays_list[datetime(year, month, d).weekday()]
+                and f"{year:04d}-{month:02d}-{d:02d}" not in hd
             )
         # Default: Mon-Fri
         return sum(
-            1 for d in range(1, num_days + 1) if datetime(year, month, d).weekday() < 5
+            1
+            for d in range(1, num_days + 1)
+            if datetime(year, month, d).weekday() < 5
+            and f"{year:04d}-{month:02d}-{d:02d}" not in hd
         )
 
     # ── Employees ──────────────────────────────────────────────
@@ -705,7 +715,9 @@ class SP5Database:
             # Build a simple pattern string like "F/F/F/S/S/–/– | S/S/S/F/F/–/–"
             pattern_parts = []
             for week in weeks:
-                part = "/".join(str(d["shift_short"]) if d["shift_short"] else "–" for d in week)  # type: ignore[misc]
+                part = "/".join(
+                    str(d["shift_short"]) if d["shift_short"] else "–" for d in week
+                )  # type: ignore[misc]
                 pattern_parts.append(part)
             pattern = "  |  ".join(pattern_parts)
 
@@ -1496,12 +1508,9 @@ class SP5Database:
                     emp_group_id[mid] = gid
 
         prefix = f"{year:04d}-{month:02d}"
-        num_days = calendar.monthrange(year, month)[1]
 
-        # Count working days in month (Mon-Fri)
-        working_days = sum(
-            1 for d in range(1, num_days + 1) if datetime(year, month, d).weekday() < 5
-        )
+        # Public holidays for this month (used to reduce target hours)
+        holiday_dates = self.get_holiday_dates(year)
 
         # Collect schedule data for the month
         shift_hours: Dict[int, float] = {}  # employee_id -> sum of shift hours
@@ -1568,9 +1577,14 @@ class SP5Database:
         for emp in employees:
             eid = emp["ID"]
             # Target hours: prefer HRSMONTH, fallback to HRSDAY * working_days
+            # Use per-employee workdays and subtract public holidays
             target = float(emp.get("HRSMONTH") or 0)
             if target == 0:
-                target = float(emp.get("HRSDAY") or 0) * working_days
+                emp_workdays = emp.get("WORKDAYS_LIST", [])
+                emp_working_days = self._count_working_days(
+                    year, month, workdays_list=emp_workdays, holiday_dates=holiday_dates
+                )
+                target = float(emp.get("HRSDAY") or 0) * emp_working_days
             actual = shift_hours.get(eid, 0.0)
             abs_days = absence_days.get(eid, 0)
             vac = vacation_used.get(eid, 0)
@@ -1666,8 +1680,11 @@ class SP5Database:
         emp = self.get_employee(employee_id)
         if emp:
             workdays_list = emp.get("WORKDAYS_LIST", [])
+            holiday_dates_yr = self.get_holiday_dates(year)
             for m in range(1, 13):
-                working_days = self._count_working_days(year, m, workdays_list)
+                working_days = self._count_working_days(
+                    year, m, workdays_list, holiday_dates=holiday_dates_yr
+                )
                 target = float(emp.get("HRSMONTH") or 0)
                 if target == 0:
                     target = float(emp.get("HRSDAY") or 0) * working_days
@@ -3312,7 +3329,9 @@ class SP5Database:
             "details": details,
         }
 
-    def check_annual_close_exists(self, year: int, group_id: Optional[int] = None) -> bool:
+    def check_annual_close_exists(
+        self, year: int, group_id: Optional[int] = None
+    ) -> bool:
         """Check if annual close for year+1 already has data (idempotenz guard)."""
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
@@ -3594,10 +3613,13 @@ class SP5Database:
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
         year_str = f"{year:04d}"
         workdays_list = emp.get("WORKDAYS_LIST", [])
+        holiday_dates = self.get_holiday_dates(year)
 
         monthly: Dict[int, Dict] = {}
         for m in range(1, 13):
-            working_days = self._count_working_days(year, m, workdays_list)
+            working_days = self._count_working_days(
+                year, m, workdays_list, holiday_dates=holiday_dates
+            )
             target = float(emp.get("HRSMONTH") or 0)
             if target == 0:
                 target = float(emp.get("HRSDAY") or 0) * working_days
@@ -3782,8 +3804,8 @@ class SP5Database:
             member_ids = set(emp_map.keys())
 
         # Build lookup maps for shift names, durations, and absence types
-        shift_name_map: dict = {}   # {shift_id: shift_name}
-        shift_dur_map: dict = {}    # {shift_id: duration_hours (float)}
+        shift_name_map: dict = {}  # {shift_id: shift_name}
+        shift_dur_map: dict = {}  # {shift_id: duration_hours (float)}
         for r in self._read("SHIFT"):
             sid = r.get("ID")
             if sid:
@@ -3797,8 +3819,8 @@ class SP5Database:
 
         # Build: employee_id -> set of dates with shifts, date -> shift name, date -> duration
         shift_dates: dict = {}
-        shift_detail: dict = {}     # {(eid, date): shift_name}
-        shift_duration: dict = {}   # {(eid, date): duration_hours}
+        shift_detail: dict = {}  # {(eid, date): shift_name}
+        shift_duration: dict = {}  # {(eid, date): duration_hours}
         for r in self._read("MASHI"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
@@ -3810,7 +3832,9 @@ class SP5Database:
                     if (eid, d) not in shift_detail:
                         shift_detail[(eid, d)] = sname
                     if (eid, d) not in shift_duration:
-                        shift_duration[(eid, d)] = shift_dur_map.get(sid, 0.0) if sid else 0.0
+                        shift_duration[(eid, d)] = (
+                            shift_dur_map.get(sid, 0.0) if sid else 0.0
+                        )
         for r in self._read("SPSHI"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
@@ -3919,7 +3943,9 @@ class SP5Database:
             )
             for date_str in sorted(shift_dates.get(eid, set())):
                 if date_str in month_holidays:
-                    day_display = date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    day_display = (
+                        date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    )
                     sname = shift_detail.get((eid, date_str), "")
                     shift_info = f" ({sname})" if sname else ""
                     conflicts.append(
@@ -3946,7 +3972,9 @@ class SP5Database:
             for date_str in sorted(shift_dates.get(eid, set())):
                 dur = shift_duration.get((eid, date_str), 0.0)
                 if dur > LONG_SHIFT_THRESHOLD_H:
-                    day_display = date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    day_display = (
+                        date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    )
                     sname = shift_detail.get((eid, date_str), "")
                     shift_info = f" ({sname})" if sname else ""
                     conflicts.append(
@@ -4317,11 +4345,14 @@ class SP5Database:
         entitled_ids = {lt_id for lt_id, lt in lt_map.items() if lt.get("ENTITLED")}
         year_str = f"{year:04d}"
         workdays_list = emp.get("WORKDAYS_LIST", [])
+        holiday_dates = self.get_holiday_dates(year)
 
         # Initialize monthly buckets
         monthly: Dict[int, Dict] = {}
         for m in range(1, 13):
-            working_days = self._count_working_days(year, m, workdays_list)
+            working_days = self._count_working_days(
+                year, m, workdays_list, holiday_dates=holiday_dates
+            )
             target = float(emp.get("HRSMONTH") or 0)
             if target == 0:
                 target = float(emp.get("HRSDAY") or 0) * working_days
