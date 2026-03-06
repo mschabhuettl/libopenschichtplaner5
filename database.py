@@ -3709,12 +3709,19 @@ class SP5Database:
         Detect conflicts for a given month:
           - shift_and_absence: employee has both a MASHI/SPSHI entry AND an ABSEN entry on the same day
           - holiday_ban: employee has an ABSEN entry on a day within a HOBAN period for their group(s)
-        Returns list of dicts with keys: employee_id, date, type, message
+          - holiday_shift: employee has a shift on a public holiday (severity: warning)
+          - long_shift: employee has a shift lasting more than 10 hours (severity: warning)
+
+        Note: Hidden employees (HIDE=True) are intentionally excluded from conflict detection.
+        This matches the Schichtplaner5 convention where hidden employees are archived/inactive
+        and should not generate operational warnings.
+
+        Returns list of dicts with keys: employee_id, date, type, severity, message
         """
         prefix = f"{year:04d}-{month:02d}"
         conflicts = []
 
-        # Get relevant employees
+        # Get relevant employees (hidden employees intentionally excluded — see docstring)
         employees_list = self.get_employees(include_hidden=False)
         emp_map = {e["ID"]: e for e in employees_list}
 
@@ -3723,21 +3730,24 @@ class SP5Database:
         else:
             member_ids = set(emp_map.keys())
 
-        # Build lookup maps for shift names and absence types
-        shift_name_map: dict = {}  # {shift_id: shift_name}
+        # Build lookup maps for shift names, durations, and absence types
+        shift_name_map: dict = {}   # {shift_id: shift_name}
+        shift_dur_map: dict = {}    # {shift_id: duration_hours (float)}
         for r in self._read("SHIFT"):
             sid = r.get("ID")
             if sid:
                 shift_name_map[sid] = r.get("NAME", r.get("SHORTNAME", str(sid)))
+                shift_dur_map[sid] = float(r.get("DURATION0", 0) or 0)
         leave_name_map: dict = {}  # {leave_type_id: leave_type_name}
         for r in self._read("LEAVT"):
             lid = r.get("ID")
             if lid:
                 leave_name_map[lid] = r.get("NAME", r.get("SHORTNAME", str(lid)))
 
-        # Build: employee_id -> set of dates with shifts, and date -> shift name
+        # Build: employee_id -> set of dates with shifts, date -> shift name, date -> duration
         shift_dates: dict = {}
-        shift_detail: dict = {}  # {(eid, date): shift_name}
+        shift_detail: dict = {}     # {(eid, date): shift_name}
+        shift_duration: dict = {}   # {(eid, date): duration_hours}
         for r in self._read("MASHI"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
@@ -3748,6 +3758,8 @@ class SP5Database:
                     sname = shift_name_map.get(sid, "") if sid else ""
                     if (eid, d) not in shift_detail:
                         shift_detail[(eid, d)] = sname
+                    if (eid, d) not in shift_duration:
+                        shift_duration[(eid, d)] = shift_dur_map.get(sid, 0.0) if sid else 0.0
         for r in self._read("SPSHI"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
@@ -3756,6 +3768,8 @@ class SP5Database:
                     shift_dates.setdefault(eid, set()).add(d)
                     if (eid, d) not in shift_detail:
                         shift_detail[(eid, d)] = r.get("NAME", "Sonderschicht")
+                    if (eid, d) not in shift_duration:
+                        shift_duration[(eid, d)] = float(r.get("DURATION", 0) or 0)
 
         # Build: employee_id -> list of absence date strings, and date -> leave type name
         absence_dates: dict = {}
@@ -3841,6 +3855,61 @@ class SP5Database:
                             }
                         )
                         break  # one conflict per employee per date
+
+        # Conflict type 3: holiday_shift — shift on a public holiday
+        holiday_dates = self.get_holiday_dates(year)
+        month_holidays = {d for d in holiday_dates if d.startswith(prefix)}
+        for eid in member_ids:
+            emp = emp_map.get(eid)
+            emp_name = (
+                f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(", ")
+                if emp
+                else f"MA#{eid}"
+            )
+            for date_str in sorted(shift_dates.get(eid, set())):
+                if date_str in month_holidays:
+                    day_display = date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    sname = shift_detail.get((eid, date_str), "")
+                    shift_info = f" ({sname})" if sname else ""
+                    conflicts.append(
+                        {
+                            "employee_id": eid,
+                            "employee_name": emp_name,
+                            "date": date_str,
+                            "type": "holiday_shift",
+                            "severity": "warning",
+                            "shift_name": sname,
+                            "message": f"{emp_name}: Schicht{shift_info} am Feiertag {day_display}",
+                        }
+                    )
+
+        # Conflict type 4: long_shift — shift duration > 10 hours
+        LONG_SHIFT_THRESHOLD_H = 10.0
+        for eid in member_ids:
+            emp = emp_map.get(eid)
+            emp_name = (
+                f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(", ")
+                if emp
+                else f"MA#{eid}"
+            )
+            for date_str in sorted(shift_dates.get(eid, set())):
+                dur = shift_duration.get((eid, date_str), 0.0)
+                if dur > LONG_SHIFT_THRESHOLD_H:
+                    day_display = date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
+                    sname = shift_detail.get((eid, date_str), "")
+                    shift_info = f" ({sname})" if sname else ""
+                    conflicts.append(
+                        {
+                            "employee_id": eid,
+                            "employee_name": emp_name,
+                            "date": date_str,
+                            "type": "long_shift",
+                            "severity": "warning",
+                            "shift_name": sname,
+                            "duration_hours": dur,
+                            "message": f"{emp_name}: Schicht{shift_info} dauert {dur:.1f}h am {day_display} (>10h)",
+                        }
+                    )
 
         # Sort by date then employee_id
         conflicts.sort(key=lambda c: (c["date"], c["employee_id"]))
