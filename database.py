@@ -3610,12 +3610,25 @@ class SP5Database:
                 "absence_days": 0,
             }
 
+        # Build set of absence dates for this employee to avoid counting
+        # planned shifts on sick/absence days as actual worked hours
+        absence_dates_tb: set = set()
+        for r in self._read("ABSEN"):
+            if r.get("EMPLOYEEID") != employee_id:
+                continue
+            d = r.get("DATE", "")
+            if d and d.startswith(year_str):
+                absence_dates_tb.add(d[:10])
+
         # Collect actual hours from MASHI
         for r in self._read("MASHI"):
             if r.get("EMPLOYEEID") != employee_id:
                 continue
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
+                continue
+            # Skip: employee is absent on this day — don't count planned shift as worked
+            if d[:10] in absence_dates_tb:
                 continue
             m = int(d[5:7])
             sid = r.get("SHIFTID")
@@ -3629,6 +3642,9 @@ class SP5Database:
                 continue
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
+                continue
+            # Skip: employee is absent on this day
+            if d[:10] in absence_dates_tb:
                 continue
             m = int(d[5:7])
             monthly[m]["actual_hours"] += float(r.get("DURATION", 0) or 0)
@@ -4320,12 +4336,25 @@ class SP5Database:
                 "shifts_count": 0,
             }
 
+        # Build set of absence dates for this employee to avoid counting
+        # planned shifts on sick/absence days as actual worked hours
+        absence_dates: set = set()
+        for r in self._read("ABSEN"):
+            if r.get("EMPLOYEEID") != employee_id:
+                continue
+            d = r.get("DATE", "")
+            if d and d.startswith(year_str):
+                absence_dates.add(d[:10])
+
         # Scan MASHI (regular schedule)
         for r in self._read("MASHI"):
             if r.get("EMPLOYEEID") != employee_id:
                 continue
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
+                continue
+            # Skip: employee is absent on this day — don't count planned shift as worked
+            if d[:10] in absence_dates:
                 continue
             m = int(d[5:7])
             try:
@@ -4351,6 +4380,9 @@ class SP5Database:
                 continue
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
+                continue
+            # Skip: employee is absent on this day
+            if d[:10] in absence_dates:
                 continue
             m = int(d[5:7])
             try:
@@ -5192,6 +5224,22 @@ class SP5Database:
         window_start = month_start - _td(days=21)  # 3 weeks before
         window_end = _date(year, month, days_in_month)
 
+        # Build set of absence dates per employee in window (sick/absence days must not
+        # count as worked days — otherwise a sick streak inflates the burnout indicator)
+        emp_absence_dates: dict[int, set] = {}
+        for r in self._read("ABSEN"):
+            d_str = r.get("DATE", "")
+            if not d_str or len(d_str) < 10:
+                continue
+            try:
+                d = _date.fromisoformat(d_str[:10])
+            except ValueError:
+                continue
+            if window_start <= d <= window_end:
+                eid = r.get("EMPLOYEEID")
+                if eid:
+                    emp_absence_dates.setdefault(eid, set()).add(d)
+
         # Collect all working days from MASHI + SPSHI in window
         emp_work_dates: dict[int, set] = {}
         for table in ("MASHI", "SPSHI"):
@@ -5206,6 +5254,9 @@ class SP5Database:
                 if window_start <= d <= window_end:
                     eid = r.get("EMPLOYEEID")
                     if eid:
+                        # Skip absence days — planned shifts don't mean actually worked
+                        if d in emp_absence_dates.get(eid, set()):
+                            continue
                         emp_work_dates.setdefault(eid, set()).add(d)
 
         results = []
