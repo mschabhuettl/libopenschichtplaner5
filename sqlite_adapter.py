@@ -132,7 +132,7 @@ class SP5SQLiteAdapter:
             # Allow running adapter standalone (e.g. for testing)
             import sys
             sys.path.insert(0, os.path.dirname(__file__))
-            from dbf_reader import read_dbf
+            from dbf_reader import read_dbf  # type: ignore[no-redef]
 
         def _dbf(name: str) -> List[Dict[str, Any]]:
             path = os.path.join(daten_path, f"5{name}.DBF")

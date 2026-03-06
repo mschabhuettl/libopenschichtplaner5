@@ -4807,12 +4807,9 @@ class SP5Database:
     # ── Schicht-Wünsche & Sperrtage ──────────────────────────
 
     def _wishes_path(self) -> str:
-        """Path to wishes.json stored in the backend data directory."""
-        data_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-        )
-        os.makedirs(data_dir, exist_ok=True)
-        return os.path.join(data_dir, "wishes.json")
+        """Path to wishes.json stored alongside the DB files."""
+        os.makedirs(self.db_path, exist_ok=True)
+        return os.path.join(self.db_path, "wishes.json")
 
     def get_wishes(
         self,
