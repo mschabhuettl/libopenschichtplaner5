@@ -4919,6 +4919,27 @@ class SP5Database:
             json.dump(entries, f, ensure_ascii=False, indent=2)
         return entry
 
+    def update_wish_status(self, wish_id: int, status: str) -> Optional[Dict]:
+        """Update the status field of a wish. Returns updated entry or None if not found."""
+        import datetime as _dt
+
+        path = self._wishes_path()
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                entries: List[Dict] = json.load(f)
+        except Exception:
+            return None
+        entry = next((e for e in entries if e.get("id") == wish_id), None)
+        if entry is None:
+            return None
+        entry["status"] = status
+        entry["updated_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+        return entry
+
     def delete_wish(self, wish_id: int) -> int:
         """Delete a wish by ID. Returns 1 if deleted, 0 if not found."""
         path = self._wishes_path()
