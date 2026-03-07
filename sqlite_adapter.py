@@ -18,10 +18,11 @@ Design goals:
   - Schema closely mirrors DBF field names for easy 1:1 comparison
 """
 
+import logging
 import os
 import sqlite3
-import logging
-from typing import List, Dict, Any, Optional
+from datetime import UTC
+from typing import Any
 
 _log = logging.getLogger("sp5api.sqlite_adapter")
 
@@ -116,7 +117,7 @@ class SP5SQLiteAdapter:
     #  Sync from DBF                                                       #
     # ------------------------------------------------------------------ #
 
-    def sync_from_dbf(self, daten_path: str) -> Dict[str, int]:
+    def sync_from_dbf(self, daten_path: str) -> dict[str, int]:
         """
         Read the three core DBF tables and upsert into SQLite.
 
@@ -136,7 +137,7 @@ class SP5SQLiteAdapter:
             sys.path.insert(0, os.path.dirname(__file__))
             from dbf_reader import read_dbf  # type: ignore[no-redef]
 
-        def _dbf(name: str) -> List[Dict[str, Any]]:
+        def _dbf(name: str) -> list[dict[str, Any]]:
             path = os.path.join(daten_path, f"5{name}.DBF")
             try:
                 return read_dbf(path)
@@ -144,11 +145,11 @@ class SP5SQLiteAdapter:
                 _log.warning("Could not read %s: %s", path, exc)
                 return []
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
-        def _date(val) -> Optional[str]:
+        def _date(val) -> str | None:
             """Normalise SP5 date value to ISO string or None."""
             if not val:
                 return None
@@ -265,21 +266,21 @@ class SP5SQLiteAdapter:
     #  Simple query helpers (demo only)                                    #
     # ------------------------------------------------------------------ #
 
-    def get_employees(self) -> List[Dict]:
+    def get_employees(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM employees WHERE active=1 ORDER BY position, name"
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_groups(self) -> List[Dict]:
+    def get_groups(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM groups ORDER BY position, name"
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_bookings_for_employee(self, employee_id: int) -> List[Dict]:
+    def get_bookings_for_employee(self, employee_id: int) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM bookings WHERE employee_id=? ORDER BY date",

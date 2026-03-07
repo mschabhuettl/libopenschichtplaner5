@@ -28,7 +28,7 @@ import os
 import struct
 from contextlib import contextmanager
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .dbf_reader import _decode_string, _parse_date, get_table_fields
 
@@ -82,7 +82,7 @@ def _encode_string(value: str, field_len: int) -> bytes:
     return result[:field_len]
 
 
-def _encode_field(value: Any, field: Dict) -> bytes:
+def _encode_field(value: Any, field: dict) -> bytes:
     """Encode a single value according to its DBF field descriptor."""
     ftype = field["type"]
     flen = field["len"]
@@ -132,7 +132,7 @@ def _encode_field(value: Any, field: Dict) -> bytes:
 # ─── header helpers ───────────────────────────────────────────────────────────
 
 
-def _read_header_info(filepath: str) -> Tuple[int, int, int]:
+def _read_header_info(filepath: str) -> tuple[int, int, int]:
     """Return (num_records, header_size, record_size) from the DBF header."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"DBF-Datei nicht gefunden: {filepath}")
@@ -176,7 +176,7 @@ def _exclusive_open(filepath: str):
 # ─── public API ───────────────────────────────────────────────────────────────
 
 
-def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
+def append_record(filepath: str, fields: list[dict], record: dict) -> int:
     """
     Append *record* to the end of *filepath*.
 
@@ -252,7 +252,7 @@ def append_record(filepath: str, fields: List[Dict], record: Dict) -> int:
     return new_count
 
 
-def delete_record(filepath: str, fields: List[Dict], record_index: int) -> None:
+def delete_record(filepath: str, fields: list[dict], record_index: int) -> None:
     """
     Mark record *record_index* as deleted by writing 0x2A at its first byte.
 
@@ -283,9 +283,9 @@ def delete_record(filepath: str, fields: List[Dict], record_index: int) -> None:
 
 def update_record(
     filepath: str,
-    fields: List[Dict],
+    fields: list[dict],
     record_index: int,
-    data: Dict,
+    data: dict,
 ) -> None:
     """
     Overwrite specific fields of record *record_index* in-place.
@@ -338,9 +338,9 @@ def update_record(
 
 def find_all_records(
     filepath: str,
-    fields: Optional[List[Dict]] = None,
+    fields: list[dict] | None = None,
     **filters,
-) -> List[Tuple[int, Dict]]:
+) -> list[tuple[int, dict]]:
     """
     Return every non-deleted record in *filepath* that matches all *filters*.
 
@@ -373,7 +373,7 @@ def find_all_records(
         # File removed or corrupted between the exists-check and open
         return []
 
-    results: List[Tuple[int, Dict]] = []
+    results: list[tuple[int, dict]] = []
 
     try:
         open_file = open(filepath, "rb")
@@ -405,9 +405,9 @@ def find_all_records(
 # ─── internal parsing (re-uses dbf_reader helpers) ────────────────────────────
 
 
-def _parse_record(raw: bytes, fields: List[Dict]) -> Dict[str, Any]:
+def _parse_record(raw: bytes, fields: list[dict]) -> dict[str, Any]:
     """Parse a raw record byte-string into a dict using the given field descriptors."""
-    record: Dict[str, Any] = {}
+    record: dict[str, Any] = {}
     offset = 1  # skip delete-flag
 
     for field in fields:
@@ -443,7 +443,7 @@ def _parse_record(raw: bytes, fields: List[Dict]) -> Dict[str, Any]:
     return record
 
 
-def _matches(record: Dict, filters: Dict) -> bool:
+def _matches(record: dict, filters: dict) -> bool:
     """Return True if *record* satisfies all key=value pairs in *filters*."""
     for key, expected in filters.items():
         if record.get(key) != expected:

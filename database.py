@@ -2,15 +2,16 @@
 High-level database access for Schichtplaner5 .DBF files.
 """
 
-import os
+import calendar
 import json
 import logging
-import calendar
+import os
 import threading
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from .dbf_reader import read_dbf, get_table_fields
+from typing import Any
+
 from .color_utils import bgr_to_hex, is_light_color
+from .dbf_reader import get_table_fields, read_dbf
 from .dbf_writer import append_record, delete_record, find_all_records, update_record
 
 _db_logger = logging.getLogger("sp5api")
@@ -20,7 +21,7 @@ _db_logger = logging.getLogger("sp5api")
 # Avoids re-reading unchanged DBF files across requests.
 # RLock (re-entrant) because _read() and _invalidate_cache() may be called
 # from the same thread (e.g. write path calls _invalidate_cache then _read).
-_GLOBAL_DBF_CACHE: Dict[tuple, tuple] = {}
+_GLOBAL_DBF_CACHE: dict[tuple, tuple] = {}
 _CACHE_LOCK = threading.RLock()
 
 
@@ -31,7 +32,7 @@ class SP5Database:
     def _table(self, name: str) -> str:
         return os.path.join(self.db_path, f"5{name}.DBF")
 
-    def _read(self, name: str) -> List[Dict[str, Any]]:
+    def _read(self, name: str) -> list[dict[str, Any]]:
         """Read a DBF table, using a global mtime-based cache.
 
         The cache is shared across all requests and instances for the same
@@ -76,7 +77,7 @@ class SP5Database:
         with _CACHE_LOCK:
             _GLOBAL_DBF_CACHE.pop(key, None)
 
-    def _color_fields(self, record: Dict) -> Dict:
+    def _color_fields(self, record: dict) -> dict:
         """Convert BGR color fields to hex strings."""
         for key in (
             "COLORTEXT",
@@ -96,8 +97,8 @@ class SP5Database:
         self,
         year: int,
         month: int,
-        workdays_list: Optional[list] = None,
-        holiday_dates: Optional[set] = None,
+        workdays_list: list | None = None,
+        holiday_dates: set | None = None,
     ) -> int:
         """Count working days in a month, using WORKDAYS_LIST when available.
 
@@ -123,7 +124,7 @@ class SP5Database:
         )
 
     # ── Employees ──────────────────────────────────────────────
-    def get_employees(self, include_hidden: bool = False) -> List[Dict]:
+    def get_employees(self, include_hidden: bool = False) -> list[dict]:
         """Return list of active employees, optionally including hidden ones."""
         rows = self._read("EMPL")
         result = []
@@ -164,7 +165,7 @@ class SP5Database:
         result.sort(key=lambda x: x.get("POSITION", 0))
         return result
 
-    def get_employee(self, emp_id: int) -> Optional[Dict]:
+    def get_employee(self, emp_id: int) -> dict | None:
         """Return a single employee by ID, or None if not found."""
         for e in self.get_employees(include_hidden=True):
             if e.get("ID") == emp_id:
@@ -172,7 +173,7 @@ class SP5Database:
         return None
 
     # ── Groups ─────────────────────────────────────────────────
-    def get_groups(self, include_hidden: bool = False) -> List[Dict]:
+    def get_groups(self, include_hidden: bool = False) -> list[dict]:
         """Return list of shift groups, optionally including hidden ones."""
         rows = self._read("GROUP")
         if not include_hidden:
@@ -182,15 +183,15 @@ class SP5Database:
         rows.sort(key=lambda x: x.get("POSITION", 0))
         return rows
 
-    def get_group_members(self, group_id: int) -> List[int]:
+    def get_group_members(self, group_id: int) -> list[int]:
         """Return list of employee IDs in a group."""
         assignments = self._read("GRASG")
         return [a["EMPLOYEEID"] for a in assignments if a.get("GROUPID") == group_id]
 
-    def get_all_group_members(self) -> Dict[int, List[int]]:
+    def get_all_group_members(self) -> dict[int, list[int]]:
         """Return a mapping of group_id -> [employee_ids] in one pass (avoids N+1)."""
         assignments = self._read("GRASG")
-        result: Dict[int, List[int]] = {}
+        result: dict[int, list[int]] = {}
         for a in assignments:
             gid = a.get("GROUPID")
             eid = a.get("EMPLOYEEID")
@@ -198,13 +199,13 @@ class SP5Database:
                 result.setdefault(gid, []).append(eid)
         return result
 
-    def get_employee_groups(self, emp_id: int) -> List[int]:
+    def get_employee_groups(self, emp_id: int) -> list[int]:
         """Return list of group IDs an employee belongs to."""
         assignments = self._read("GRASG")
         return [a["GROUPID"] for a in assignments if a.get("EMPLOYEEID") == emp_id]
 
     # ── Shifts ─────────────────────────────────────────────────
-    def get_shifts(self, include_hidden: bool = False) -> List[Dict]:
+    def get_shifts(self, include_hidden: bool = False) -> list[dict]:
         """Return all shift definitions, optionally including hidden ones."""
         rows = self._read("SHIFT")
         if not include_hidden:
@@ -212,7 +213,7 @@ class SP5Database:
         for r in rows:
             self._color_fields(r)
             # Parse STARTEND per weekday
-            times: Dict[int, Any] = {}
+            times: dict[int, Any] = {}
             for i in range(7):
                 key = f"STARTEND{i}"
                 val = r.get(key, "").strip()
@@ -228,7 +229,7 @@ class SP5Database:
         rows.sort(key=lambda x: x.get("POSITION", 0))
         return rows
 
-    def get_shift(self, shift_id: int) -> Optional[Dict]:
+    def get_shift(self, shift_id: int) -> dict | None:
         """Return a single shift definition by ID, or None if not found."""
         for s in self.get_shifts(include_hidden=True):
             if s.get("ID") == shift_id:
@@ -236,7 +237,7 @@ class SP5Database:
         return None
 
     # ── Leave Types ────────────────────────────────────────────
-    def get_leave_types(self, include_hidden: bool = False) -> List[Dict]:
+    def get_leave_types(self, include_hidden: bool = False) -> list[dict]:
         """Return all leave/absence type definitions."""
         rows = self._read("LEAVT")
         if not include_hidden:
@@ -246,7 +247,7 @@ class SP5Database:
         rows.sort(key=lambda x: x.get("POSITION", 0))
         return rows
 
-    def get_leave_type(self, lt_id: int) -> Optional[Dict]:
+    def get_leave_type(self, lt_id: int) -> dict | None:
         """Return a single leave type by ID, or None if not found."""
         for lt in self.get_leave_types(include_hidden=True):
             if lt.get("ID") == lt_id:
@@ -254,7 +255,7 @@ class SP5Database:
         return None
 
     # ── Workplaces ─────────────────────────────────────────────
-    def get_workplaces(self, include_hidden: bool = False) -> List[Dict]:
+    def get_workplaces(self, include_hidden: bool = False) -> list[dict]:
         """Return all workplace definitions."""
         rows = self._read("WOPL")
         if not include_hidden:
@@ -265,7 +266,7 @@ class SP5Database:
         return rows
 
     # ── Holidays ───────────────────────────────────────────────
-    def get_holidays(self, year: Optional[int] = None) -> List[Dict]:
+    def get_holidays(self, year: int | None = None) -> list[dict]:
         """Return public holidays for the given year and state."""
         rows = self._read("HOLID")
         if year is not None:
@@ -295,8 +296,8 @@ class SP5Database:
 
     # ── Schedule ───────────────────────────────────────────────
     def get_schedule(
-        self, year: int, month: int, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int, month: int, group_id: int | None = None
+    ) -> list[dict]:
         """
         Get schedule entries for a month.
         Returns list of {employee_id, date, type, shift_id, leave_type_id,
@@ -392,7 +393,7 @@ class SP5Database:
         return entries
 
     # ── Users ──────────────────────────────────────────────────
-    def _role_from_record(self, r: Dict) -> str:
+    def _role_from_record(self, r: dict) -> str:
         if r.get("ADMIN"):
             return "Admin"
         if r.get("RIGHTS") == 1:
@@ -405,7 +406,7 @@ class SP5Database:
 
         return hashlib.md5(password.encode("utf-8")).digest()
 
-    def get_users(self) -> List[Dict]:
+    def get_users(self) -> list[dict]:
         rows = self._read("USER")
         result = []
         for r in rows:
@@ -508,7 +509,7 @@ class SP5Database:
         if raw_idx is None:
             raise ValueError(f"User {user_id} not found")
 
-        update_data: Dict[str, Any] = {}
+        update_data: dict[str, Any] = {}
 
         if "NAME" in data:
             update_data["NAME"] = data["NAME"]
@@ -584,7 +585,7 @@ class SP5Database:
         # For unknown actions, only allow admin
         return bool(user.get("ADMIN"))
 
-    def verify_user_password(self, name: str, password: str) -> Optional[Dict]:
+    def verify_user_password(self, name: str, password: str) -> dict | None:
         """Verify username+password, return user dict (without hash) or None."""
         import hashlib
 
@@ -628,7 +629,7 @@ class SP5Database:
         return None
 
     # ── Cycles ─────────────────────────────────────────────────
-    def get_cycles(self) -> List[Dict]:
+    def get_cycles(self) -> list[dict]:
         cycles = self._read("CYCLE")
         entries = self._read("CYENT")
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
@@ -652,7 +653,7 @@ class SP5Database:
         return cycles
 
     # ── Shift Cycles (rich) ───────────────────────────────────
-    def get_shift_cycles(self) -> List[Dict]:
+    def get_shift_cycles(self) -> list[dict]:
         """Return all shift cycles with their weekly schedule from CYCLE + CYENT."""
         cycles = self._read("CYCLE")
         entries = self._read("CYENT")
@@ -736,7 +737,7 @@ class SP5Database:
         result.sort(key=lambda x: x.get("position", 0))
         return result
 
-    def get_shift_cycle(self, cycle_id: int) -> Optional[Dict]:
+    def get_shift_cycle(self, cycle_id: int) -> dict | None:
         """Return a single cycle by ID with full schedule."""
         for c in self.get_shift_cycles():
             if c["ID"] == cycle_id:
@@ -745,7 +746,7 @@ class SP5Database:
 
     # ── Shift Cycle CRUD ──────────────────────────────────────
 
-    def create_shift_cycle(self, name: str, size_weeks: int) -> Dict:
+    def create_shift_cycle(self, name: str, size_weeks: int) -> dict:
         """Create a new shift cycle in 5CYCLE.DBF. Returns the new cycle dict."""
         filepath = self._table("CYCLE")
         fields = get_table_fields(filepath)
@@ -772,7 +773,7 @@ class SP5Database:
             "schedule": [],
         }
 
-    def update_shift_cycle(self, cycle_id: int, name: str, size_weeks: int) -> Dict:
+    def update_shift_cycle(self, cycle_id: int, name: str, size_weeks: int) -> dict:
         """Update name and/or size of an existing shift cycle."""
         filepath = self._table("CYCLE")
         fields = get_table_fields(filepath)
@@ -817,7 +818,7 @@ class SP5Database:
         return 1
 
     def set_cycle_entry(
-        self, cycle_id: int, index: int, shift_id: Optional[int]
+        self, cycle_id: int, index: int, shift_id: int | None
     ) -> None:
         """Create or update a 5CYENT entry for the given cycle and day index."""
         filepath = self._table("CYENT")
@@ -850,7 +851,7 @@ class SP5Database:
         return count
 
     # ── Cycle Assignments ─────────────────────────────────────
-    def get_cycle_assignments(self) -> List[Dict]:
+    def get_cycle_assignments(self) -> list[dict]:
         """Return all cycle assignments from CYASS."""
         rows = self._read("CYASS")
         result = []
@@ -867,14 +868,14 @@ class SP5Database:
             )
         return result
 
-    def get_cycle_assignment_for_employee(self, employee_id: int) -> Optional[Dict]:
+    def get_cycle_assignment_for_employee(self, employee_id: int) -> dict | None:
         """Return the active cycle assignment for an employee, if any."""
         for a in self.get_cycle_assignments():
             if a["employee_id"] == employee_id:
                 return a
         return None
 
-    def assign_cycle(self, employee_id: int, cycle_id: int, start_date: str) -> Dict:
+    def assign_cycle(self, employee_id: int, cycle_id: int, start_date: str) -> dict:
         """Assign a cycle to an employee (append to CYASS)."""
         filepath = self._table("CYASS")
         fields = get_table_fields(filepath)
@@ -914,7 +915,7 @@ class SP5Database:
         self,
         year: int,
         month: int,
-        employee_ids: Optional[list] = None,
+        employee_ids: list | None = None,
         force: bool = False,
         dry_run: bool = False,
         respect_restrictions: bool = True,
@@ -927,8 +928,8 @@ class SP5Database:
         respect_restrictions: True = Schicht-Sperren aus RESTR beachten
         Gibt zurück: {'created': N, 'skipped': N, 'skipped_restriction': N, 'errors': [...], 'preview': [...], 'report': {...}}
         """
-        from datetime import date as _date
         import calendar as _cal
+        from datetime import date as _date
 
         # Collect all cycle assignments
         all_assignments = self.get_cycle_assignments()
@@ -1218,7 +1219,7 @@ class SP5Database:
         }
 
     # ── Staffing requirements ─────────────────────────────────
-    def get_staffing(self, year: int, month: int) -> List[Dict]:
+    def get_staffing(self, year: int, month: int) -> list[dict]:
         """Return staffing requirements from 5SHDEM (min/max per weekday/shift/group)."""
         rows = self._read("SHDEM")
         return rows
@@ -1238,7 +1239,7 @@ class SP5Database:
         colortext: int = 0,
         colorbar: int = 0,
         colorbk: int = 16777215,
-    ) -> Dict:
+    ) -> dict:
         """Append a new record to 5SPSHI.DBF. Returns the created record."""
         filepath = self._table("SPSHI")
         fields = get_table_fields(filepath)
@@ -1299,8 +1300,8 @@ class SP5Database:
         return 1
 
     def get_spshi_entries_for_day(
-        self, date_str: str, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, date_str: str, group_id: int | None = None
+    ) -> list[dict]:
         """Return all SPSHI entries for a specific date, optionally filtered by group."""
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
@@ -1351,8 +1352,8 @@ class SP5Database:
 
     # ── Day schedule ──────────────────────────────────────────
     def get_schedule_day(
-        self, date_str: str, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, date_str: str, group_id: int | None = None
+    ) -> list[dict]:
         """
         Return all employees with their assignment for a specific day.
         date_str: 'YYYY-MM-DD'
@@ -1367,7 +1368,7 @@ class SP5Database:
         workplaces_map = {w["ID"]: w for w in self.get_workplaces(include_hidden=True)}
 
         # Build assignment lookup for the day
-        day_entries: Dict[int, Dict] = {}
+        day_entries: dict[int, dict] = {}
 
         for r in self._read("MASHI"):
             if r.get("DATE") == date_str:
@@ -1484,8 +1485,8 @@ class SP5Database:
 
     # ── Monthly statistics ────────────────────────────────────
     def get_statistics(
-        self, year: int, month: int, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int, month: int, group_id: int | None = None
+    ) -> list[dict]:
         """Return per-employee statistics for a month."""
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
@@ -1497,8 +1498,8 @@ class SP5Database:
 
         # Build employee→primary group mapping (use get_all_group_members to avoid N+1)
         groups_all = self.get_groups()
-        emp_group: Dict[int, str] = {}
-        emp_group_id: Dict[int, int] = {}
+        emp_group: dict[int, str] = {}
+        emp_group_id: dict[int, int] = {}
         all_gm = self.get_all_group_members()  # {group_id: [employee_ids]}
         for grp in groups_all:
             gid = grp["ID"]
@@ -1513,11 +1514,11 @@ class SP5Database:
         holiday_dates = self.get_holiday_dates(year)
 
         # Collect schedule data for the month
-        shift_hours: Dict[int, float] = {}  # employee_id -> sum of shift hours
-        shifts_count: Dict[int, int] = {}  # employee_id -> number of shift entries
-        absence_days: Dict[int, int] = {}  # employee_id -> count of absences
-        vacation_used: Dict[int, int] = {}  # employee_id -> count of vacation days
-        sick_days: Dict[int, int] = {}  # employee_id -> count of sick days
+        shift_hours: dict[int, float] = {}  # employee_id -> sum of shift hours
+        shifts_count: dict[int, int] = {}  # employee_id -> number of shift entries
+        absence_days: dict[int, int] = {}  # employee_id -> count of absences
+        vacation_used: dict[int, int] = {}  # employee_id -> count of vacation days
+        sick_days: dict[int, int] = {}  # employee_id -> count of sick days
 
         # Pre-collect absence dates so shift hours on absence days are excluded
         absence_date_set: set = set()  # (employee_id, date_str)
@@ -1613,14 +1614,14 @@ class SP5Database:
         return result
 
     # ── Year overview ─────────────────────────────────────────
-    def get_schedule_year(self, year: int, employee_id: int) -> List[Dict]:
+    def get_schedule_year(self, year: int, employee_id: int) -> list[dict]:
         """Return schedule summary per month for a given employee."""
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
 
         # Collect all entries for this employee this year
         year_str = f"{year:04d}"
-        monthly: Dict[int, Dict] = {}
+        monthly: dict[int, dict] = {}
 
         for m in range(1, 13):
             monthly[m] = {
@@ -1694,7 +1695,7 @@ class SP5Database:
         return list(monthly.values())
 
     # ── Week schedule ─────────────────────────────────────────
-    def get_schedule_week(self, date_str: str, group_id: Optional[int] = None) -> Dict:
+    def get_schedule_week(self, date_str: str, group_id: int | None = None) -> dict:
         """
         Return schedule for the full ISO week (Mon–Sun) that contains date_str.
         Returns { week_start, week_end, days: [{ date, entries: [...] }] }
@@ -1721,7 +1722,7 @@ class SP5Database:
         week_set = set(week_dates)
 
         # Build lookup: date -> employee_id -> entry
-        day_entries: Dict[str, Dict[Any, Dict]] = {d: {} for d in week_dates}
+        day_entries: dict[str, dict[Any, dict]] = {d: {} for d in week_dates}
 
         for r in self._read("MASHI"):
             d = r.get("DATE", "")
@@ -1771,7 +1772,7 @@ class SP5Database:
                         "leave_type_id": r.get("LEAVETYPID"),
                     }
 
-        def _build_entry(emp: Dict, entry: Dict) -> Dict:
+        def _build_entry(emp: dict, entry: dict) -> dict:
             eid = emp["ID"]
             kind = entry.get("kind")
             shift_id = entry.get("shift_id")
@@ -1876,7 +1877,7 @@ class SP5Database:
     # ── Write: add schedule entry ─────────────────────────────
     def add_schedule_entry(
         self, employee_id: int, date_str: str, shift_id: int
-    ) -> Dict:
+    ) -> dict:
         """Write a new schedule entry to MASHI.
 
         Raises ValueError if an entry for this employee+date already exists in MASHI.
@@ -1955,7 +1956,7 @@ class SP5Database:
         return count
 
     # ── Write: add absence ────────────────────────────────────
-    def add_absence(self, employee_id: int, date_str: str, leave_type_id: int) -> Dict:
+    def add_absence(self, employee_id: int, date_str: str, leave_type_id: int) -> dict:
         """Write a new absence entry to ABSEN.
 
         Raises ValueError if an absence for this employee+date already exists
@@ -1990,8 +1991,8 @@ class SP5Database:
 
     # ── Staffing requirements (SHDEM + DADEM) ────────────────
     def get_staffing_requirements(
-        self, year: Optional[int] = None, month: Optional[int] = None
-    ) -> Dict:
+        self, year: int | None = None, month: int | None = None
+    ) -> dict:
         """Return staffing requirements: SHDEM (shift min/max per weekday) + DADEM (daily totals)."""
         shdem_rows = self._read("SHDEM")
         dadem_rows = self._read("DADEM")
@@ -2029,8 +2030,8 @@ class SP5Database:
 
     # ── Notes ─────────────────────────────────────────────────
     def get_notes(
-        self, date: Optional[str] = None, employee_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, date: str | None = None, employee_id: int | None = None
+    ) -> list[dict]:
         """Return notes, optionally filtered by date and/or employee."""
         rows = self._read("NOTE")
         result = []
@@ -2058,7 +2059,7 @@ class SP5Database:
         employee_id: int = 0,
         text2: str = "",
         category: str = "",
-    ) -> Dict:
+    ) -> dict:
         """Append a note to 5NOTE."""
         filepath = self._table("NOTE")
         fields = get_table_fields(filepath)
@@ -2112,12 +2113,12 @@ class SP5Database:
     def update_note(
         self,
         note_id: int,
-        text1: Optional[str] = None,
-        text2: Optional[str] = None,
-        employee_id: Optional[int] = None,
-        date: Optional[str] = None,
-        category: Optional[str] = None,
-    ) -> Optional[Dict]:
+        text1: str | None = None,
+        text2: str | None = None,
+        employee_id: int | None = None,
+        date: str | None = None,
+        category: str | None = None,
+    ) -> dict | None:
         """Update fields of an existing note."""
         filepath = self._table("NOTE")
         fields = get_table_fields(filepath)
@@ -2126,7 +2127,7 @@ class SP5Database:
             return None
         _NOTE_TEXT_MAX = 125
         _NOTE_CAT_MAX = 9
-        update_data: Dict[str, Any] = {}
+        update_data: dict[str, Any] = {}
         if text1 is not None:
             if len(text1) > _NOTE_TEXT_MAX:
                 raise ValueError(
@@ -2164,7 +2165,7 @@ class SP5Database:
         return None
 
     # ── Periods ───────────────────────────────────────────────
-    def get_periods(self, group_id: Optional[int] = None) -> List[Dict]:
+    def get_periods(self, group_id: int | None = None) -> list[dict]:
         """Return accounting periods from PERIO."""
         rows = self._read("PERIO")
         result = []
@@ -2371,7 +2372,7 @@ class SP5Database:
             try:
                 import json as _json
 
-                with open(wishes_path, "r", encoding="utf-8") as f:
+                with open(wishes_path, encoding="utf-8") as f:
                     wishes = _json.load(f)
                 wishes = [w for w in wishes if w.get("employee_id") != emp_id]
                 with open(wishes_path, "w", encoding="utf-8") as f:
@@ -2750,7 +2751,7 @@ class SP5Database:
     def _assignments_path(self) -> str:
         return os.path.join(self.db_path, "workplace_assignments.json")
 
-    def _load_assignments(self) -> Dict[str, List[int]]:
+    def _load_assignments(self) -> dict[str, list[int]]:
         """Load {workplace_id_str: [employee_id, ...]} from sidecar JSON."""
         import json
 
@@ -2758,19 +2759,19 @@ class SP5Database:
         if not os.path.exists(path):
             return {}
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
 
-    def _save_assignments(self, data: Dict[str, List[int]]) -> None:
+    def _save_assignments(self, data: dict[str, list[int]]) -> None:
         import json
 
         path = self._assignments_path()
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-    def get_workplace_employees(self, wp_id: int) -> List[Dict]:
+    def get_workplace_employees(self, wp_id: int) -> list[dict]:
         """Return employees explicitly assigned to a workplace (sidecar JSON)."""
         assignments = self._load_assignments()
         emp_ids = assignments.get(str(wp_id), [])
@@ -2819,7 +2820,7 @@ class SP5Database:
         return False  # not assigned
 
     # ── Extra Charges (XCHAR) ─────────────────────────────────
-    def get_extracharges(self, include_hidden: bool = False) -> List[Dict]:
+    def get_extracharges(self, include_hidden: bool = False) -> list[dict]:
         rows = self._read("XCHAR")
         if not include_hidden:
             rows = [r for r in rows if not r.get("HIDE")]
@@ -2906,7 +2907,7 @@ class SP5Database:
             return ""
 
     @staticmethod
-    def _time_str_to_minutes(time_str: str) -> Optional[int]:
+    def _time_str_to_minutes(time_str: str) -> int | None:
         """Convert 'HH:MM' to minutes from midnight, or None if invalid."""
         parts = time_str.strip().split(":")
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -2942,7 +2943,7 @@ class SP5Database:
         return total
 
     def _get_shift_time_range(
-        self, shift: Dict, weekday: int
+        self, shift: dict, weekday: int
     ) -> tuple[int | None, int | None, float]:
         """Return (start_min, end_min, duration_h) for a shift on given weekday."""
         raw = shift.get(f"STARTEND{weekday}", "")
@@ -2961,8 +2962,8 @@ class SP5Database:
         self,
         year: int,
         month: int,
-        employee_id: Optional[int] = None,
-    ) -> List[Dict]:
+        employee_id: int | None = None,
+    ) -> list[dict]:
         """
         Calculate surcharge hours per ExtraCharge rule for a given month.
         Returns a list of dicts: { charge_id, charge_name, hours, shift_count, ... }
@@ -2998,7 +2999,7 @@ class SP5Database:
                 {"employee_id": eid, "date": d, "shift_id": r.get("SHIFTID")}
             )
 
-        charge_acc: Dict[int, Dict] = {
+        charge_acc: dict[int, dict] = {
             c["ID"]: {"hours": 0.0, "count": 0, "charge": c} for c in charges
         }
 
@@ -3063,10 +3064,10 @@ class SP5Database:
     # ── Leave Entitlements ────────────────────────────────────
     def get_absences_list(
         self,
-        year: Optional[int] = None,
-        employee_id: Optional[int] = None,
-        leave_type_id: Optional[int] = None,
-    ) -> List[Dict]:
+        year: int | None = None,
+        employee_id: int | None = None,
+        leave_type_id: int | None = None,
+    ) -> list[dict]:
         """Return all absences, optionally filtered by year/employee/leave type."""
         rows = self._read("ABSEN")
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
@@ -3094,7 +3095,7 @@ class SP5Database:
         result.sort(key=lambda x: x.get("date", ""))
         return result
 
-    def get_all_group_assignments(self) -> List[Dict]:
+    def get_all_group_assignments(self) -> list[dict]:
         """Return all group assignments (employee_id, group_id pairs)."""
         rows = self._read("GRASG")
         return [
@@ -3103,8 +3104,8 @@ class SP5Database:
         ]
 
     def get_leave_entitlements(
-        self, year: Optional[int] = None, employee_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int | None = None, employee_id: int | None = None
+    ) -> list[dict]:
         """Read leave entitlements from 5LEAEN.DBF."""
         rows = self._read("LEAEN")
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
@@ -3138,7 +3139,7 @@ class SP5Database:
         days: float,
         carry_forward: float = 0,
         leave_type_id: int = 0,
-    ) -> Dict:
+    ) -> dict:
         """Create or update a leave entitlement record."""
         filepath = self._table("LEAEN")
         fields = get_table_fields(filepath)
@@ -3182,7 +3183,7 @@ class SP5Database:
                 return float(lt["STDENTIT"])
         return 25.0
 
-    def get_leave_balance(self, employee_id: int, year: int) -> Dict:
+    def get_leave_balance(self, employee_id: int, year: int) -> dict:
         """Calculate leave balance: entitlement + carry_forward - used = remaining."""
         default_ent = self._get_default_entitlement()
         entitlements = self.get_leave_entitlements(year=year, employee_id=employee_id)
@@ -3224,7 +3225,7 @@ class SP5Database:
             "has_custom_entitlement": len(entitlements) > 0,
         }
 
-    def get_leave_balance_group(self, year: int, group_id: int) -> List[Dict]:
+    def get_leave_balance_group(self, year: int, group_id: int) -> list[dict]:
         """Get leave balance for all employees in a group."""
         member_ids = self.get_group_members(group_id)
         emp_map = {e["ID"]: e for e in self.get_employees(include_hidden=True)}
@@ -3243,7 +3244,7 @@ class SP5Database:
         return result
 
     # ── Holiday Bans ──────────────────────────────────────────
-    def get_holiday_bans(self, group_id: Optional[int] = None) -> List[Dict]:
+    def get_holiday_bans(self, group_id: int | None = None) -> list[dict]:
         """Read holiday bans from 5HOBAN.DBF."""
         rows = self._read("HOBAN")
         groups_map = {g["ID"]: g for g in self.get_groups(include_hidden=True)}
@@ -3269,7 +3270,7 @@ class SP5Database:
 
     def create_holiday_ban(
         self, group_id: int, start_date: str, end_date: str, reason: str = ""
-    ) -> Dict:
+    ) -> dict:
         """Create a holiday ban entry."""
         filepath = self._table("HOBAN")
         fields = get_table_fields(filepath)
@@ -3308,8 +3309,8 @@ class SP5Database:
 
     # ── Annual Close ──────────────────────────────────────────
     def get_annual_close_preview(
-        self, year: int, group_id: Optional[int] = None, carry_forward_days: float = 10
-    ) -> Dict:
+        self, year: int, group_id: int | None = None, carry_forward_days: float = 10
+    ) -> dict:
         """Preview annual close without saving changes."""
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
@@ -3360,7 +3361,7 @@ class SP5Database:
         }
 
     def check_annual_close_exists(
-        self, year: int, group_id: Optional[int] = None
+        self, year: int, group_id: int | None = None
     ) -> bool:
         """Check if annual close for year+1 already has data (idempotenz guard)."""
         employees = self.get_employees(include_hidden=False)
@@ -3376,8 +3377,8 @@ class SP5Database:
         return False
 
     def run_annual_close(
-        self, year: int, group_id: Optional[int] = None, carry_forward_days: float = 10
-    ) -> Dict:
+        self, year: int, group_id: int | None = None, carry_forward_days: float = 10
+    ) -> dict:
         """
         Run annual close: calculate remaining vacation, set carry_forward for year+1.
         Returns summary with { processed, total_carry_forward, total_forfeited, already_existed }.
@@ -3442,8 +3443,8 @@ class SP5Database:
     # ── Zeitkonto / Überstunden ───────────────────────────────
 
     def get_overtime_records(
-        self, year: Optional[int] = None, employee_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int | None = None, employee_id: int | None = None
+    ) -> list[dict]:
         """Return records from 5OVER.DBF (manual overtime adjustments)."""
         rows = self._read("OVER")
         result = []
@@ -3466,10 +3467,10 @@ class SP5Database:
 
     def get_bookings(
         self,
-        year: Optional[int] = None,
-        month: Optional[int] = None,
-        employee_id: Optional[int] = None,
-    ) -> List[Dict]:
+        year: int | None = None,
+        month: int | None = None,
+        employee_id: int | None = None,
+    ) -> list[dict]:
         """Return manual time bookings from 5BOOK.DBF."""
         rows = self._read("BOOK")
         result = []
@@ -3503,7 +3504,7 @@ class SP5Database:
         booking_type: int,
         value: float,
         note: str = "",
-    ) -> Dict:
+    ) -> dict:
         """Append a new manual booking to 5BOOK.DBF."""
         filepath = self._table("BOOK")
         fields = get_table_fields(filepath)
@@ -3540,7 +3541,7 @@ class SP5Database:
         return 1
 
     # ── Carry Forward (Saldo-Übertrag) ────────────────────────
-    def get_carry_forward(self, employee_id: int, year: int) -> Dict:
+    def get_carry_forward(self, employee_id: int, year: int) -> dict:
         """Read carry-forward booking (TYPE=2) for employee+year from 5BOOK.DBF."""
         year_str = str(year)
         for r in self._read("BOOK"):
@@ -3563,7 +3564,7 @@ class SP5Database:
             "booking_id": None,
         }
 
-    def set_carry_forward(self, employee_id: int, year: int, hours: float) -> Dict:
+    def set_carry_forward(self, employee_id: int, year: int, hours: float) -> dict:
         """Set carry-forward for employee+year. Replaces any existing TYPE=2 entry for that year."""
         filepath = self._table("BOOK")
         fields = get_table_fields(filepath)
@@ -3601,7 +3602,7 @@ class SP5Database:
             "booking_id": new_id,
         }
 
-    def calculate_annual_statement(self, employee_id: int, year: int) -> Dict:
+    def calculate_annual_statement(self, employee_id: int, year: int) -> dict:
         """
         Calculate annual saldo and return carry-forward for next year.
         saldo = actual_hours - target_hours + booking_adjustments (excl. TYPE=2)
@@ -3630,7 +3631,7 @@ class SP5Database:
             "next_year": year + 1,
         }
 
-    def calculate_time_balance(self, employee_id: int, year: int) -> Dict:
+    def calculate_time_balance(self, employee_id: int, year: int) -> dict:
         """
         Calculate Soll vs Ist hours and overtime saldo for one employee for a full year.
         Uses schedule data (MASHI/SPSHI), employee's target hours, and 5OVER adjustments.
@@ -3645,7 +3646,7 @@ class SP5Database:
         workdays_list = emp.get("WORKDAYS_LIST", [])
         holiday_dates = self.get_holiday_dates(year)
 
-        monthly: Dict[int, Dict] = {}
+        monthly: dict[int, dict] = {}
         for m in range(1, 13):
             working_days = self._count_working_days(
                 year, m, workdays_list, holiday_dates=holiday_dates
@@ -3773,9 +3774,9 @@ class SP5Database:
     def get_zeitkonto(
         self,
         year: int,
-        employee_id: Optional[int] = None,
-        group_id: Optional[int] = None,
-    ) -> List[Dict]:
+        employee_id: int | None = None,
+        group_id: int | None = None,
+    ) -> list[dict]:
         """Return Zeitkonto summary for all employees (or filtered by group/employee)."""
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
@@ -3806,7 +3807,7 @@ class SP5Database:
     # ── Schedule Conflicts ────────────────────────────────────
 
     def get_schedule_conflicts(
-        self, year: int, month: int, group_id: Optional[int] = None
+        self, year: int, month: int, group_id: int | None = None
     ) -> list:
         """
         Detect conflicts for a given month:
@@ -4026,7 +4027,7 @@ class SP5Database:
 
     # ── Restrictions ───────────────────────────────────────────
 
-    def get_restrictions(self, employee_id: Optional[int] = None) -> List[Dict]:
+    def get_restrictions(self, employee_id: int | None = None) -> list[dict]:
         """Return all shift restrictions, optionally filtered by employee."""
         rows = self._read("RESTR")
         if employee_id is not None:
@@ -4054,7 +4055,7 @@ class SP5Database:
         shift_id: int,
         reason: str = "",
         weekday: int = 0,
-    ) -> Dict:
+    ) -> dict:
         """Create a restriction (or return existing one)."""
         filepath = self._table("RESTR")
         fields = get_table_fields(filepath)
@@ -4185,7 +4186,7 @@ class SP5Database:
         }
 
     # ── Settings (USETT) ──────────────────────────────────────
-    def get_usett(self) -> Dict:
+    def get_usett(self) -> dict:
         """Read global settings from 5USETT.DBF (record 0)."""
         rows = self._read("USETT")
         if not rows:
@@ -4205,7 +4206,7 @@ class SP5Database:
             "BACKUPFR": r.get("BACKUPFR", 0),
         }
 
-    def update_usett(self, data: Dict) -> Dict:
+    def update_usett(self, data: dict) -> dict:
         """Update global settings in 5USETT.DBF (record 0)."""
         filepath = self._table("USETT")
         fields = get_table_fields(filepath)
@@ -4219,7 +4220,7 @@ class SP5Database:
         else:
             # Fallback: use first record regardless of ID
             raw_idx = 0
-        update_data: Dict[str, Any] = {}
+        update_data: dict[str, Any] = {}
         allowed = (
             "ANOANAME",
             "ANOASHORT",
@@ -4241,8 +4242,8 @@ class SP5Database:
 
     # ── Special Staffing Requirements (SPDEM) ─────────────────
     def get_special_staffing(
-        self, date: Optional[str] = None, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, date: str | None = None, group_id: int | None = None
+    ) -> list[dict]:
         """Return date-specific staffing requirements from 5SPDEM.DBF."""
         rows = self._read("SPDEM")
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
@@ -4288,7 +4289,7 @@ class SP5Database:
         workplacid: int,
         min_staff: int,
         max_staff: int,
-    ) -> Dict:
+    ) -> dict:
         """Create a new date-specific staffing requirement in 5SPDEM.DBF."""
         filepath = self._table("SPDEM")
         fields = get_table_fields(filepath)
@@ -4306,14 +4307,14 @@ class SP5Database:
         append_record(filepath, fields, record)
         return {**record, "id": new_id}
 
-    def update_special_staffing(self, record_id: int, data: Dict) -> Dict:
+    def update_special_staffing(self, record_id: int, data: dict) -> dict:
         """Update a date-specific staffing requirement."""
         filepath = self._table("SPDEM")
         fields = get_table_fields(filepath)
         raw_idx, existing = self._find_record("SPDEM", record_id)
         if raw_idx is None:
             raise ValueError(f"SpecialStaffing {record_id} not found")
-        update_data: Dict[str, Any] = {}
+        update_data: dict[str, Any] = {}
         for key in ("GROUPID", "DATE", "SHIFTID", "WORKPLACID", "MIN", "MAX"):
             if key in data:
                 update_data[key] = data[key]
@@ -4332,7 +4333,7 @@ class SP5Database:
 
     # ── Employee Detailed Statistics ──────────────────────────
 
-    def _is_night_shift(self, shift: Dict, weekday: int) -> bool:
+    def _is_night_shift(self, shift: dict, weekday: int) -> bool:
         """Return True if the shift on given weekday qualifies as a night shift.
         Night = start >= 22:00 OR end <= 06:00 (and shift has a defined time window).
         """
@@ -4359,7 +4360,7 @@ class SP5Database:
                         return True
         return False
 
-    def get_employee_stats_year(self, employee_id: int, year: int) -> Dict:
+    def get_employee_stats_year(self, employee_id: int, year: int) -> dict:
         """
         Return detailed per-employee statistics for all 12 months of a year.
         Includes: soll_stunden, ist_stunden, weekend_shifts, night_shifts, vacation_days, absence_days.
@@ -4378,7 +4379,7 @@ class SP5Database:
         holiday_dates = self.get_holiday_dates(year)
 
         # Initialize monthly buckets
-        monthly: Dict[int, Dict] = {}
+        monthly: dict[int, dict] = {}
         for m in range(1, 13):
             working_days = self._count_working_days(
                 year, m, workdays_list, holiday_dates=holiday_dates
@@ -4520,7 +4521,7 @@ class SP5Database:
             },
         }
 
-    def get_employee_stats_month(self, employee_id: int, year: int, month: int) -> Dict:
+    def get_employee_stats_month(self, employee_id: int, year: int, month: int) -> dict:
         """
         Return detailed stats for a single employee for a specific month.
         Subset of get_employee_stats_year for one month.
@@ -4546,7 +4547,7 @@ class SP5Database:
         }
 
     # ── Stats ──────────────────────────────────────────────────
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Return summary statistics for the connected database."""
         employees = self.get_employees()
         groups = self.get_groups()
@@ -4569,9 +4570,9 @@ class SP5Database:
     # ── Cycle Exceptions (5CYEXC) ─────────────────────────────
     def get_cycle_exceptions(
         self,
-        employee_id: Optional[int] = None,
-        cycle_assignment_id: Optional[int] = None,
-    ) -> List[Dict]:
+        employee_id: int | None = None,
+        cycle_assignment_id: int | None = None,
+    ) -> list[dict]:
         """Get cycle exceptions (overrides for specific dates in assigned cycles)."""
         rows = self._read("CYEXC")
         result = []
@@ -4600,7 +4601,7 @@ class SP5Database:
         cycle_assignment_id: int,
         date_str: str,
         exc_type: int = 1,
-    ) -> Dict:
+    ) -> dict:
         """Set a cycle exception for a specific date (type 1=skip, 0=normal)."""
         filepath = self._table("CYEXC")
         fields = get_table_fields(filepath)
@@ -4647,7 +4648,7 @@ class SP5Database:
         return 1
 
     # ── Employee Access (5EMACC) ──────────────────────────────
-    def get_employee_access(self, user_id: Optional[int] = None) -> List[Dict]:
+    def get_employee_access(self, user_id: int | None = None) -> list[dict]:
         """Get employee-level access restrictions for users."""
         rows = self._read("EMACC")
         result = []
@@ -4664,7 +4665,7 @@ class SP5Database:
             )
         return result
 
-    def set_employee_access(self, user_id: int, employee_id: int, rights: int) -> Dict:
+    def set_employee_access(self, user_id: int, employee_id: int, rights: int) -> dict:
         """Set access rights for a user on a specific employee."""
         filepath = self._table("EMACC")
         fields = get_table_fields(filepath)
@@ -4707,7 +4708,7 @@ class SP5Database:
         return 1
 
     # ── Group Access (5GRACC) ─────────────────────────────────
-    def get_group_access(self, user_id: Optional[int] = None) -> List[Dict]:
+    def get_group_access(self, user_id: int | None = None) -> list[dict]:
         """Get group-level access restrictions for users."""
         rows = self._read("GRACC")
         result = []
@@ -4724,7 +4725,7 @@ class SP5Database:
             )
         return result
 
-    def set_group_access(self, user_id: int, group_id: int, rights: int) -> Dict:
+    def set_group_access(self, user_id: int, group_id: int, rights: int) -> dict:
         """Set access rights for a user on a specific group."""
         filepath = self._table("GRACC")
         fields = get_table_fields(filepath)
@@ -4777,17 +4778,17 @@ class SP5Database:
     def get_changelog(
         self,
         limit: int = 100,
-        user: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-    ) -> List[Dict]:
+        user: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
         """Read changelog entries from backend/data/changelog.json."""
         path = self._changelog_path()
         if not os.path.exists(path):
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries: List[Dict] = json.load(f)
+            with open(path, encoding="utf-8") as f:
+                entries: list[dict] = json.load(f)
         except Exception:
             return []
         # Filter
@@ -4805,15 +4806,15 @@ class SP5Database:
 
     def log_action(
         self, user: str, action: str, entity: str, entity_id: int, details: str = ""
-    ) -> Dict:
+    ) -> dict:
         """Append a log entry to backend/data/changelog.json. Keeps max 1000 entries."""
         import datetime as _dt
 
         path = self._changelog_path()
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    entries: List[Dict] = json.load(f)
+                with open(path, encoding="utf-8") as f:
+                    entries: list[dict] = json.load(f)
             except Exception:
                 entries = []
         else:
@@ -4843,17 +4844,17 @@ class SP5Database:
 
     def get_wishes(
         self,
-        employee_id: Optional[int] = None,
-        year: Optional[int] = None,
-        month: Optional[int] = None,
-    ) -> List[Dict]:
+        employee_id: int | None = None,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> list[dict]:
         """Return shift wishes/blocked days, optionally filtered."""
         path = self._wishes_path()
         if not os.path.exists(path):
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries: List[Dict] = json.load(f)
+            with open(path, encoding="utf-8") as f:
+                entries: list[dict] = json.load(f)
         except Exception:
             return []
         if employee_id is not None:
@@ -4871,9 +4872,9 @@ class SP5Database:
         employee_id: int,
         date: str,
         wish_type: str,
-        shift_id: Optional[int] = None,
+        shift_id: int | None = None,
         note: str = "",
-    ) -> Dict:
+    ) -> dict:
         """Add a wish (WUNSCH) or blocked day (SPERRUNG).
 
         wish_type: 'WUNSCH' | 'SPERRUNG'
@@ -4883,8 +4884,8 @@ class SP5Database:
         path = self._wishes_path()
         if os.path.exists(path):
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    entries: List[Dict] = json.load(f)
+                with open(path, encoding="utf-8") as f:
+                    entries: list[dict] = json.load(f)
             except Exception:
                 entries = []
         else:
@@ -4919,7 +4920,7 @@ class SP5Database:
             json.dump(entries, f, ensure_ascii=False, indent=2)
         return entry
 
-    def update_wish_status(self, wish_id: int, status: str) -> Optional[Dict]:
+    def update_wish_status(self, wish_id: int, status: str) -> dict | None:
         """Update the status field of a wish. Returns updated entry or None if not found."""
         import datetime as _dt
 
@@ -4927,8 +4928,8 @@ class SP5Database:
         if not os.path.exists(path):
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries: List[Dict] = json.load(f)
+            with open(path, encoding="utf-8") as f:
+                entries: list[dict] = json.load(f)
         except Exception:
             return None
         entry = next((e for e in entries if e.get("id") == wish_id), None)
@@ -4946,8 +4947,8 @@ class SP5Database:
         if not os.path.exists(path):
             return 0
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries: List[Dict] = json.load(f)
+            with open(path, encoding="utf-8") as f:
+                entries: list[dict] = json.load(f)
         except Exception:
             return 0
         new_entries = [e for e in entries if e.get("id") != wish_id]
@@ -4960,8 +4961,8 @@ class SP5Database:
     # ── Overtime Summary ──────────────────────────────────────
 
     def get_overtime_summary(
-        self, year: int, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int, group_id: int | None = None
+    ) -> list[dict]:
         """Calculate overtime (Überstunden) per employee for a given year.
 
         Returns:
@@ -4999,7 +5000,7 @@ class SP5Database:
 
     # ── Sickness Statistics ───────────────────────────────────
 
-    def get_sickness_statistics(self, year: int) -> Dict:
+    def get_sickness_statistics(self, year: int) -> dict:
         """Return sickness/Krankenstand statistics for a given year.
 
         Returns:
@@ -5035,8 +5036,8 @@ class SP5Database:
         {e["ID"]: e for e in employees}
 
         # Group membership per employee
-        emp_group: Dict[int, str] = {}
-        emp_group_id: Dict[int, int] = {}
+        emp_group: dict[int, str] = {}
+        emp_group_id: dict[int, int] = {}
         for grp in self.get_groups(include_hidden=False):
             gid = grp.get("ID")
             gname = grp.get("NAME", "")
@@ -5045,7 +5046,7 @@ class SP5Database:
                 emp_group_id[mid] = int(gid) if gid is not None else 0
 
         # Per-employee: collect sick day dates
-        emp_dates: Dict[int, list] = {}
+        emp_dates: dict[int, list] = {}
         for ab in sick_abs:
             eid = ab.get("EMPLOYEEID")
             date_val = ab.get("DATE", "")
@@ -5140,28 +5141,28 @@ class SP5Database:
         """Path to schedule_templates.json stored in the DB data directory."""
         return os.path.join(self.db_path, "schedule_templates.json")
 
-    def _load_templates(self) -> List[Dict]:
+    def _load_templates(self) -> list[dict]:
         path = self._templates_path()
         if not os.path.exists(path):
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return []
 
-    def _save_templates(self, templates: List[Dict]) -> None:
+    def _save_templates(self, templates: list[dict]) -> None:
         path = self._templates_path()
         with open(path, "w", encoding="utf-8") as f:
             json.dump(templates, f, ensure_ascii=False, indent=2)
 
-    def get_schedule_templates(self) -> List[Dict]:
+    def get_schedule_templates(self) -> list[dict]:
         """Return all saved schedule templates."""
         return self._load_templates()
 
     def create_schedule_template(
-        self, name: str, description: str, assignments: List[Dict]
-    ) -> Dict:
+        self, name: str, description: str, assignments: list[dict]
+    ) -> dict:
         """Save a new schedule template.
 
         Each assignment: {employee_id, weekday_offset (0=Mon..6=Sun), shift_id}.
@@ -5192,13 +5193,14 @@ class SP5Database:
 
     def apply_schedule_template(
         self, template_id: int, target_date: str, force: bool = False
-    ) -> Dict:
+    ) -> dict:
         """Apply a template to the week starting on target_date (any day = week anchor).
 
         Each assignment's weekday_offset (0=Mon..6=Sun) is added to target_date.
         Returns { created, updated, skipped } counts.
         """
-        from datetime import datetime as _dtd, timedelta as _td
+        from datetime import datetime as _dtd
+        from datetime import timedelta as _td
 
         templates = self._load_templates()
         tmpl = next((t for t in templates if t.get("id") == template_id), None)
@@ -5244,14 +5246,14 @@ class SP5Database:
         }
 
     def get_week_entries_for_template(
-        self, year: int, month: int, week_start_day: int, group_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, year: int, month: int, week_start_day: int, group_id: int | None = None
+    ) -> list[dict]:
         """Return all shift schedule entries for a 7-day window starting on week_start_day.
 
         Adds a 'weekday_offset' (0=Mon..6=Sun) and 'source_date' field to each entry.
         """
-        from datetime import date as _date
         from calendar import monthrange as _mr
+        from datetime import date as _date
 
         days_in_month = _mr(year, month)[1]
         result = []
@@ -5277,16 +5279,17 @@ class SP5Database:
         month: int,
         streak_threshold: int = 6,
         overtime_threshold_pct: float = 20.0,
-        group_id: Optional[int] = None,
-    ) -> List[Dict]:
+        group_id: int | None = None,
+    ) -> list[dict]:
         """
         Analyse schedule to detect at-risk employees:
         1. Long consecutive work streaks (>= streak_threshold days)
         2. Significant overtime (actual_hours > target_hours * (1 + overtime_threshold_pct/100))
         Returns list of {employee_id, employee_name, risk_level, reasons, streak, overtime_pct}
         """
-        from datetime import date as _date, timedelta as _td
         import calendar as _cal
+        from datetime import date as _date
+        from datetime import timedelta as _td
 
         employees = self.get_employees()
         if group_id:
@@ -5436,24 +5439,24 @@ class SP5Database:
         os.makedirs(data_dir, exist_ok=True)
         return os.path.join(data_dir, "swap_requests.json")
 
-    def _load_swap_requests(self) -> List[Dict]:
+    def _load_swap_requests(self) -> list[dict]:
         path = self._swap_requests_path()
         if not os.path.exists(path):
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return []
 
-    def _save_swap_requests(self, entries: List[Dict]) -> None:
+    def _save_swap_requests(self, entries: list[dict]) -> None:
         path = self._swap_requests_path()
         with open(path, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
 
     def get_swap_requests(
-        self, status: Optional[str] = None, employee_id: Optional[int] = None
-    ) -> List[Dict]:
+        self, status: str | None = None, employee_id: int | None = None
+    ) -> list[dict]:
         entries = self._load_swap_requests()
         if status:
             entries = [e for e in entries if e.get("status") == status]
@@ -5475,7 +5478,7 @@ class SP5Database:
         partner_id: int,
         partner_date: str,
         note: str = "",
-    ) -> Dict:
+    ) -> dict:
         import datetime as _dt
 
         entries = self._load_swap_requests()
@@ -5503,7 +5506,7 @@ class SP5Database:
         action: str,
         resolved_by: str = "planner",
         reject_reason: str = "",
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """action: 'approve' or 'reject'"""
         import datetime as _dt
 

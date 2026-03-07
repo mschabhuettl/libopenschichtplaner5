@@ -4,7 +4,7 @@ Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
 
 import struct
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 
 def _is_utf16_le(raw: bytes) -> bool:
@@ -62,7 +62,7 @@ def _decode_string(raw: bytes) -> str:
         return raw.split(b"\x00")[0].decode("latin-1", errors="replace").strip()
 
 
-def _parse_date(raw: str) -> Optional[str]:
+def _parse_date(raw: str) -> str | None:
     """Parse dBASE date string YYYYMMDD to ISO format."""
     s = raw.strip()
     if len(s) == 8 and s.isdigit():
@@ -75,7 +75,7 @@ def _parse_date(raw: str) -> Optional[str]:
     return None
 
 
-def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, Any]]:
+def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, Any]]:
     """
     Read a .DBF file and return a list of records as dicts.
     String fields are decoded as UTF-16 LE (as used by Schichtplaner5).
@@ -101,7 +101,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
         record_size = struct.unpack_from("<H", header, 10)[0]
 
         # Read field descriptors (32 bytes each, terminated by 0x0D)
-        fields: List[Dict[str, Any]] = []
+        fields: list[dict[str, Any]] = []
         f.seek(32)
         while True:
             field_data = f.read(32)
@@ -131,7 +131,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
             if raw[0] == 0x2A:
                 continue
 
-            record: Dict[str, Any] = {}
+            record: dict[str, Any] = {}
             offset = 1  # skip deletion flag
 
             for field in fields:
@@ -176,7 +176,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> List[Dict[str, 
     return records
 
 
-def get_table_fields(filepath: str) -> List[Dict[str, Any]]:
+def get_table_fields(filepath: str) -> list[dict[str, Any]]:
     """Return field definitions for a .DBF file."""
     try:
         open_file = open(filepath, "rb")
