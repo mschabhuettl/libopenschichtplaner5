@@ -5539,3 +5539,79 @@ class SP5Database:
             return 0
         self._save_swap_requests(new_entries)
         return 1
+
+    # ── iCal Feed Tokens ──────────────────────────────────────────
+
+    def _ical_tokens_path(self) -> str:
+        """Path to ical_tokens.json stored alongside the DB files."""
+        return os.path.join(self.db_path, "ical_tokens.json")
+
+    def _load_ical_tokens(self) -> dict[str, dict]:
+        """Load iCal tokens: {token: {employee_id, created_at}}."""
+        path = self._ical_tokens_path()
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_ical_tokens(self, data: dict[str, dict]) -> None:
+        """Save iCal tokens to JSON file."""
+        path = self._ical_tokens_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def get_ical_token_for_employee(self, employee_id: int) -> str | None:
+        """Return the current iCal feed token for an employee, or None."""
+        tokens = self._load_ical_tokens()
+        for token, info in tokens.items():
+            if info.get("employee_id") == employee_id:
+                return token
+        return None
+
+    def create_ical_token(self, employee_id: int) -> str:
+        """Generate a new iCal feed token for an employee.
+
+        Revokes any existing token for this employee first.
+        Returns the new token string.
+        """
+        import secrets
+
+        tokens = self._load_ical_tokens()
+        # Revoke existing token for this employee
+        tokens = {
+            t: info
+            for t, info in tokens.items()
+            if info.get("employee_id") != employee_id
+        }
+        # Generate new token (URL-safe, 32 bytes = 43 chars)
+        new_token = secrets.token_urlsafe(32)
+        tokens[new_token] = {
+            "employee_id": employee_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        self._save_ical_tokens(tokens)
+        return new_token
+
+    def revoke_ical_token(self, employee_id: int) -> bool:
+        """Revoke the iCal feed token for an employee. Returns True if a token was revoked."""
+        tokens = self._load_ical_tokens()
+        new_tokens = {
+            t: info
+            for t, info in tokens.items()
+            if info.get("employee_id") != employee_id
+        }
+        if len(new_tokens) == len(tokens):
+            return False
+        self._save_ical_tokens(new_tokens)
+        return True
+
+    def resolve_ical_token(self, token: str) -> int | None:
+        """Look up an iCal token and return the employee_id, or None if invalid."""
+        tokens = self._load_ical_tokens()
+        info = tokens.get(token)
+        if info is None:
+            return None
+        return info.get("employee_id")
