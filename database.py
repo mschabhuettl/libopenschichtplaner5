@@ -4779,6 +4779,7 @@ class SP5Database:
         self,
         limit: int = 100,
         user: str | None = None,
+        entity_type: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[dict]:
@@ -4794,6 +4795,12 @@ class SP5Database:
         # Filter
         if user:
             entries = [e for e in entries if e.get("user", "").lower() == user.lower()]
+        if entity_type:
+            entries = [
+                e
+                for e in entries
+                if e.get("entity", "").lower() == entity_type.lower()
+            ]
         if date_from:
             entries = [e for e in entries if e.get("timestamp", "") >= date_from]
         if date_to:
@@ -4805,9 +4812,17 @@ class SP5Database:
         return entries[:limit]
 
     def log_action(
-        self, user: str, action: str, entity: str, entity_id: int, details: str = ""
+        self,
+        user: str,
+        action: str,
+        entity: str,
+        entity_id: int,
+        details: str = "",
+        old_value: dict | str | None = None,
+        new_value: dict | str | None = None,
+        user_id: int | None = None,
     ) -> dict:
-        """Append a log entry to backend/data/changelog.json. Keeps max 1000 entries."""
+        """Append a log entry to backend/data/changelog.json. Keeps max 5000 entries."""
         import datetime as _dt
 
         path = self._changelog_path()
@@ -4819,7 +4834,7 @@ class SP5Database:
                 entries = []
         else:
             entries = []
-        entry = {
+        entry: dict = {
             "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),
             "user": user,
             "action": action,  # CREATE / UPDATE / DELETE
@@ -4827,10 +4842,16 @@ class SP5Database:
             "entity_id": entity_id,
             "details": details,
         }
+        if user_id is not None:
+            entry["user_id"] = user_id
+        if old_value is not None:
+            entry["old_value"] = old_value
+        if new_value is not None:
+            entry["new_value"] = new_value
         entries.append(entry)
-        # Keep newest 1000
-        if len(entries) > 1000:
-            entries = entries[-1000:]
+        # Keep newest 5000
+        if len(entries) > 5000:
+            entries = entries[-5000:]
         with open(path, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
         return entry
