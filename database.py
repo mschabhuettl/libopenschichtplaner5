@@ -5499,6 +5499,7 @@ class SP5Database:
         partner_id: int,
         partner_date: str,
         note: str = "",
+        status: str = "pending",
     ) -> dict:
         import datetime as _dt
 
@@ -5511,7 +5512,8 @@ class SP5Database:
             "partner_id": partner_id,
             "partner_date": partner_date,
             "note": note,
-            "status": "pending",  # pending | approved | rejected | cancelled
+            "status": status,  # pending_partner | pending | approved | rejected | cancelled
+            "partner_accepted": None if status == "pending_partner" else True,
             "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
             "resolved_at": None,
             "resolved_by": None,
@@ -5520,6 +5522,33 @@ class SP5Database:
         entries.append(entry)
         self._save_swap_requests(entries)
         return entry
+
+    def partner_respond_swap(
+        self, swap_id: int, accept: bool
+    ) -> dict | None:
+        """Partner accepts or declines a swap request.
+        If accepted: status changes from pending_partner → pending.
+        If declined: status changes to rejected (by partner)."""
+        import datetime as _dt
+
+        entries = self._load_swap_requests()
+        for entry in entries:
+            if entry.get("id") == swap_id:
+                if entry["status"] != "pending_partner":
+                    return None
+                entry["partner_accepted"] = accept
+                if accept:
+                    entry["status"] = "pending"
+                else:
+                    entry["status"] = "rejected"
+                    entry["resolved_at"] = _dt.datetime.now().isoformat(
+                        timespec="seconds"
+                    )
+                    entry["resolved_by"] = "partner"
+                    entry["reject_reason"] = "Partner hat abgelehnt"
+                self._save_swap_requests(entries)
+                return entry
+        return None
 
     def resolve_swap_request(
         self,
