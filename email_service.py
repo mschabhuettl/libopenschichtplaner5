@@ -223,6 +223,7 @@ _SUBJECT_MAP: dict[str, str] = {
     "vacation_request": "Urlaubsantrag",
     "vacation_approved": "Urlaub genehmigt",
     "vacation_rejected": "Urlaub abgelehnt",
+    "absence_status": "Urlaubsantrag-Status",
     "absence": "Abwesenheit",
     "general": "Benachrichtigung",
     "info": "Information",
