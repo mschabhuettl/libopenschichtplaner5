@@ -400,11 +400,50 @@ class SP5Database:
             return "Planer"
         return "Leser"
 
-    def _hash_password(self, password: str) -> bytes:
-        """Return 16-byte MD5 digest of password (matches 5USER.DBF DIGEST field)."""
+    def _hash_password_md5(self, password: str) -> bytes:
+        """Return 16-byte MD5 digest of password (legacy, matches 5USER.DBF DIGEST field)."""
         import hashlib
 
         return hashlib.md5(password.encode("utf-8")).digest()
+
+    # ── Bcrypt sidecar store ──────────────────────────────────
+    # Bcrypt hashes are 60 chars and don't fit the 16-byte DIGEST field in
+    # 5USER.DBF, so we store them in a JSON sidecar file next to the DBF.
+
+    def _bcrypt_path(self) -> str:
+        return os.path.join(self.db_path, "5USER_BCRYPT.json")
+
+    def _load_bcrypt_hashes(self) -> dict[str, str]:
+        """Load {user_id_str: bcrypt_hash} from sidecar file."""
+        path = self._bcrypt_path()
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_bcrypt_hash(self, user_id: int, bcrypt_hash: str) -> None:
+        """Persist a bcrypt hash for a user (merge into sidecar file)."""
+        hashes = self._load_bcrypt_hashes()
+        hashes[str(user_id)] = bcrypt_hash
+        path = self._bcrypt_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(hashes, f, ensure_ascii=False)
+
+    def _hash_password(self, password: str) -> bytes:
+        """Return 16-byte MD5 digest for DBF storage (legacy compat).
+
+        New code should call _hash_password_bcrypt instead.
+        """
+        return self._hash_password_md5(password)
+
+    def _hash_password_bcrypt(self, password: str) -> str:
+        """Return bcrypt hash string for the given password."""
+        import bcrypt
+
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     def get_users(self) -> list[dict]:
         rows = self._read("USER")
@@ -451,7 +490,7 @@ class SP5Database:
         rights = 1 if role == "Planer" else 0
 
         password = data.get("PASSWORD", "")
-        digest = self._hash_password(password) if password else b"\x00" * 16
+        digest = self._hash_password_md5(password) if password else b"\x00" * 16
 
         # Default permissions based on role
         write_perms = 1 if role in ("Admin", "Planer") else 0
@@ -491,6 +530,10 @@ class SP5Database:
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
+        # Store bcrypt hash in sidecar file
+        if password:
+            bcrypt_hash = self._hash_password_bcrypt(password)
+            self._save_bcrypt_hash(new_id, bcrypt_hash)
         return {
             "ID": new_id,
             "NAME": record["NAME"],
@@ -530,7 +573,10 @@ class SP5Database:
             update_data["BACKUP"] = 1 if role == "Admin" else 0
             update_data["ACCADMWND"] = 1 if role == "Admin" else 0
         if "PASSWORD" in data and data["PASSWORD"]:
-            update_data["DIGEST"] = self._hash_password(data["PASSWORD"])
+            update_data["DIGEST"] = self._hash_password_md5(data["PASSWORD"])
+            # Also store bcrypt hash in sidecar
+            bcrypt_hash = self._hash_password_bcrypt(data["PASSWORD"])
+            self._save_bcrypt_hash(user_id, bcrypt_hash)
 
         update_record(filepath, fields, raw_idx, update_data)
 
@@ -585,47 +631,86 @@ class SP5Database:
         # For unknown actions, only allow admin
         return bool(user.get("ADMIN"))
 
+    def _build_user_dict(self, r: dict) -> dict:
+        """Build a sanitized user dict from a raw DBF record (no hash fields)."""
+        role = self._role_from_record(r)
+        is_admin = role == "Admin"
+        return {
+            "ID": r.get("ID"),
+            "NAME": r.get("NAME", ""),
+            "DESCRIP": r.get("DESCRIP", ""),
+            "ADMIN": bool(r.get("ADMIN")),
+            "RIGHTS": r.get("RIGHTS", 0),
+            "role": role,
+            "WDUTIES": bool(r.get("WDUTIES")) if not is_admin else True,
+            "WABSENCES": bool(r.get("WABSENCES")) if not is_admin else True,
+            "WOVERTIMES": bool(r.get("WOVERTIMES")) if not is_admin else True,
+            "WNOTES": bool(r.get("WNOTES")) if not is_admin else True,
+            "WCYCLEASS": bool(r.get("WCYCLEASS")) if not is_admin else True,
+            "WPAST": bool(r.get("WPAST")) if not is_admin else True,
+            "WACCEMWND": bool(r.get("WACCEMWND")) if not is_admin else True,
+            "WACCGRWND": bool(r.get("WACCGRWND")) if not is_admin else True,
+            "BACKUP": bool(r.get("BACKUP")) if not is_admin else True,
+            "SHOWSTATS": bool(r.get("SHOWSTATS")) if not is_admin else True,
+            "ACCADMWND": is_admin,
+        }
+
     def verify_user_password(self, name: str, password: str) -> dict | None:
-        """Verify username+password, return user dict (without hash) or None."""
+        """Verify username+password, return user dict (without hash) or None.
+
+        Strategy (backward-compatible migration):
+        1. Check bcrypt hash in sidecar file first (fast path for migrated users)
+        2. Fall back to legacy MD5 digest in DBF
+        3. If MD5 matches → auto-migrate to bcrypt on this login
+        """
+        import bcrypt as _bcrypt
         import hashlib
 
         rows = self._read("USER")
-        expected_bytes = hashlib.md5(password.encode("utf-8")).digest()
+        bcrypt_hashes = self._load_bcrypt_hashes()
+
         for r in rows:
             if r.get("HIDE"):
                 continue
             if r.get("NAME", "").strip().lower() != name.strip().lower():
                 continue
+
+            user_id = r.get("ID")
+            user_id_str = str(user_id)
+
+            # ── 1. Try bcrypt (migrated users) ──
+            stored_bcrypt = bcrypt_hashes.get(user_id_str)
+            if stored_bcrypt:
+                try:
+                    if _bcrypt.checkpw(password.encode("utf-8"), stored_bcrypt.encode("utf-8")):
+                        return self._build_user_dict(r)
+                except Exception:
+                    pass  # Corrupted hash — fall through to MD5
+
+            # ── 2. Fall back to legacy MD5 ──
             digest = r.get("DIGEST", "")
-            # Normalize: stored as bytes or as latin-1 decoded string
             if isinstance(digest, bytes):
                 digest_bytes = digest
             elif isinstance(digest, str):
                 digest_bytes = digest.encode("latin-1")
             else:
                 continue
+
+            expected_bytes = hashlib.md5(password.encode("utf-8")).digest()
             if digest_bytes == expected_bytes:
-                role = self._role_from_record(r)
-                is_admin = role == "Admin"
-                return {
-                    "ID": r.get("ID"),
-                    "NAME": r.get("NAME", ""),
-                    "DESCRIP": r.get("DESCRIP", ""),
-                    "ADMIN": bool(r.get("ADMIN")),
-                    "RIGHTS": r.get("RIGHTS", 0),
-                    "role": role,
-                    "WDUTIES": bool(r.get("WDUTIES")) if not is_admin else True,
-                    "WABSENCES": bool(r.get("WABSENCES")) if not is_admin else True,
-                    "WOVERTIMES": bool(r.get("WOVERTIMES")) if not is_admin else True,
-                    "WNOTES": bool(r.get("WNOTES")) if not is_admin else True,
-                    "WCYCLEASS": bool(r.get("WCYCLEASS")) if not is_admin else True,
-                    "WPAST": bool(r.get("WPAST")) if not is_admin else True,
-                    "WACCEMWND": bool(r.get("WACCEMWND")) if not is_admin else True,
-                    "WACCGRWND": bool(r.get("WACCGRWND")) if not is_admin else True,
-                    "BACKUP": bool(r.get("BACKUP")) if not is_admin else True,
-                    "SHOWSTATS": bool(r.get("SHOWSTATS")) if not is_admin else True,
-                    "ACCADMWND": is_admin,
-                }
+                # ── 3. Auto-migrate to bcrypt on successful MD5 login ──
+                try:
+                    new_hash = self._hash_password_bcrypt(password)
+                    self._save_bcrypt_hash(user_id, new_hash)
+                    _db_logger.info(
+                        "PASSWORD_MIGRATED | user_id=%d user=%s (MD5 → bcrypt)",
+                        user_id,
+                        r.get("NAME", ""),
+                    )
+                except Exception as e:
+                    _db_logger.warning("Bcrypt migration failed for user %d: %s", user_id, e)
+                return self._build_user_dict(r)
+
         return None
 
     # ── Cycles ─────────────────────────────────────────────────
@@ -2322,14 +2407,21 @@ class SP5Database:
         return {"id": emp_id, **update_data}
 
     def change_password(self, user_id: int, new_password_plain: str) -> bool:
-        """Change a user's password. Returns True if successful, False if user not found."""
+        """Change a user's password. Stores bcrypt hash in sidecar + legacy MD5 in DBF.
+
+        Returns True if successful, False if user not found.
+        """
         filepath = self._table("USER")
         fields = get_table_fields(filepath)
         raw_idx, _ = self._find_record("USER", user_id)
         if raw_idx is None:
             return False
-        digest = self._hash_password(new_password_plain)
+        # Store legacy MD5 in DBF for backward compat with desktop client
+        digest = self._hash_password_md5(new_password_plain)
         update_record(filepath, fields, raw_idx, {"DIGEST": digest})
+        # Store bcrypt hash in sidecar file (primary for web auth)
+        bcrypt_hash = self._hash_password_bcrypt(new_password_plain)
+        self._save_bcrypt_hash(user_id, bcrypt_hash)
         return True
 
     def delete_employee(self, emp_id: int) -> int:
