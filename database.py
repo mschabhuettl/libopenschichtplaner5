@@ -419,7 +419,7 @@ class SP5Database:
         if not os.path.exists(path):
             return {}
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return {}
@@ -663,8 +663,9 @@ class SP5Database:
         2. Fall back to legacy MD5 digest in DBF
         3. If MD5 matches → auto-migrate to bcrypt on this login
         """
-        import bcrypt as _bcrypt
         import hashlib
+
+        import bcrypt as _bcrypt
 
         rows = self._read("USER")
         bcrypt_hashes = self._load_bcrypt_hashes()
@@ -1007,13 +1008,26 @@ class SP5Database:
     ) -> dict:
         """
         Befüllt den Dienstplan für year/month aus den Schichtmodell-Zuweisungen.
+
+        Berücksichtigt:
+        - Schichtmodell-Zyklen (Basis)
+        - Mitarbeiter-Verfügbarkeit (availability.json)
+        - Qualifikationen/Skills (skills.json)
+        - Wochenarbeitszeit-Limits (HRSWEEK aus Mitarbeiterdaten)
+        - Bereits zugewiesene Schichten in der Woche (Konfliktvermeidung)
+        - RESTR-Einschränkungen
+
         employee_ids: None = alle MAs mit Zyklus-Zuweisung, sonst nur diese
         force: True = bestehende Einträge überschreiben
         dry_run: True = nur Vorschau (nichts wird geschrieben)
         respect_restrictions: True = Schicht-Sperren aus RESTR beachten
-        Gibt zurück: {'created': N, 'skipped': N, 'skipped_restriction': N, 'errors': [...], 'preview': [...], 'report': {...}}
+        Gibt zurück: {'created': N, 'skipped': N, 'skipped_restriction': N,
+                      'skipped_availability': N, 'skipped_hours_limit': N,
+                      'errors': [...], 'preview': [...], 'report': {...}}
         """
         import calendar as _cal
+        import json
+        import os
         from datetime import date as _date
 
         # Collect all cycle assignments
@@ -1029,6 +1043,8 @@ class SP5Database:
                 "created": 0,
                 "skipped": 0,
                 "skipped_restriction": 0,
+                "skipped_availability": 0,
+                "skipped_hours_limit": 0,
                 "errors": [],
                 "preview": [],
                 "report": {},
@@ -1053,9 +1069,18 @@ class SP5Database:
                 cycle_entries[cid][idx] = sid
 
         # Gather existing schedule entries for this month (all three tables)
+        # Also track per-employee per-date shift_ids for weekly hours calculation
         prefix = f"{year:04d}-{month:02d}"
         existing_entries: set = set()  # (employee_id, date_str)
-        for table in ("MASHI", "SPSHI", "ABSEN"):
+        existing_shift_map: dict = {}  # (employee_id, date_str) -> shift_id
+        for r in self._read("MASHI"):
+            d = r.get("DATE", "")
+            if d and d.startswith(prefix):
+                eid = r.get("EMPLOYEEID")
+                if eid is not None:
+                    existing_entries.add((eid, d))
+                    existing_shift_map[(eid, d)] = r.get("SHIFTID")
+        for table in ("SPSHI", "ABSEN"):
             for r in self._read(table):
                 d = r.get("DATE", "")
                 if d and d.startswith(prefix):
@@ -1077,27 +1102,85 @@ class SP5Database:
             except Exception:
                 pass
 
+        # ── Load availability data ──────────────────────────────
+        availability_data: dict = {}  # emp_id (int) -> {day(0-6): {available, time_windows}}
+        try:
+            avail_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "api", "data", "availability.json"
+            )
+            if os.path.exists(avail_path):
+                with open(avail_path) as f:
+                    raw_avail = json.load(f)
+                for emp_id_str, emp_avail in raw_avail.items():
+                    try:
+                        eid = int(emp_id_str)
+                    except (ValueError, TypeError):
+                        continue
+                    day_map: dict = {}
+                    for day_entry in emp_avail.get("days", []):
+                        day_num = day_entry.get("day")  # 0=Mon, 6=Sun
+                        if day_num is not None:
+                            day_map[day_num] = {
+                                "available": day_entry.get("available", True),
+                                "time_windows": day_entry.get("time_windows", []),
+                            }
+                    availability_data[eid] = day_map
+        except Exception:
+            pass  # best-effort
+
+        # ── Load skills data ────────────────────────────────────
+        skills_assignments: dict = {}  # emp_id -> set of skill_ids
+        try:
+            skills_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "api", "data", "skills.json"
+            )
+            if os.path.exists(skills_path):
+                with open(skills_path) as f:
+                    skills_data = json.load(f)
+                for assignment in skills_data.get("assignments", []):
+                    eid = assignment.get("employee_id")
+                    sid = assignment.get("skill_id")
+                    if eid is not None and sid:
+                        if eid not in skills_assignments:
+                            skills_assignments[eid] = set()
+                        skills_assignments[eid].add(sid)
+        except Exception:
+            pass  # best-effort
+
         num_days = _cal.monthrange(year, month)[1]
         created = 0
         skipped = 0
         skipped_restriction = 0
+        skipped_availability = 0
+        skipped_hours_limit = 0
         errors: list = []
-        preview: list = []  # List of {employee_id, date, shift_id, status: 'new'|'skip'|'overwrite'|'restricted'}
+        preview: list = []
         # Per-employee stats for optimization report
         emp_stats: dict = {}  # emp_id -> {'total': 0, 'weekend': 0, 'night': 0}
 
-        # Build employee name lookup for preview
+        # Build employee data lookup
         try:
-            employees_raw = self._read("EMPLO")
+            employees_raw = self._read("EMPL")
             emp_names = {
                 e.get("ID"): f"{e.get('NAME', '')} {e.get('FIRSTNAME', '')}".strip()
                 for e in employees_raw
             }
+            emp_weekly_hours: dict = {}  # emp_id -> max weekly hours (float)
+            for e in employees_raw:
+                eid = e.get("ID")
+                hrs = e.get("HRSWEEK", 0)
+                if eid is not None and hrs:
+                    try:
+                        emp_weekly_hours[eid] = float(hrs)
+                    except (ValueError, TypeError):
+                        pass
         except Exception:
             emp_names = {}
+            emp_weekly_hours = {}
 
-        # Build shift name lookup for preview + identify night shifts
+        # Build shift data lookup + identify night shifts
         night_shift_ids: set = set()
+        shift_durations: dict = {}  # shift_id -> {weekday_index: hours}
         try:
             shifts_raw = self._read("SHIFT")
             shift_names = {
@@ -1105,17 +1188,132 @@ class SP5Database:
                 for s in shifts_raw
             }
             for s in shifts_raw:
+                sid = s.get("ID")
+                if sid is None:
+                    continue
+                # Build per-weekday durations
+                durations: dict = {}
+                for wd_idx in range(8):
+                    dur_val = s.get(f"DURATION{wd_idx}", 0)
+                    try:
+                        durations[wd_idx] = float(dur_val) if dur_val else 0.0
+                    except (ValueError, TypeError):
+                        durations[wd_idx] = 0.0
+                shift_durations[sid] = durations
+
+                # Identify night shifts
                 t = s.get("STARTEND0", "") or ""
                 if "-" in t:
                     start_t = t.split("-")[0].strip()
                     try:
                         h = int(start_t.split(":")[0])
                         if h >= 20 or h < 6:
-                            night_shift_ids.add(s.get("ID"))
+                            night_shift_ids.add(sid)
                     except Exception:
                         pass
         except Exception:
             shift_names = {}
+
+        def _get_shift_duration_hours(shift_id: int, weekday_index: int) -> float:
+            """Get shift duration in hours for a specific weekday (0=Mon/default, 1=Tue, ...)."""
+            durations = shift_durations.get(shift_id, {})
+            # Try weekday-specific first, fall back to 0 (default/Monday)
+            dur = durations.get(weekday_index + 1, 0.0)  # DURATION1=Mon, etc.
+            if dur <= 0:
+                dur = durations.get(0, 0.0)  # DURATION0 = default
+            return dur
+
+        def _get_iso_week_key(d: _date) -> tuple:
+            """Return (year, week_number) for ISO week grouping."""
+            iso = d.isocalendar()
+            return (iso[0], iso[1])
+
+        def _check_availability(emp_id: int, target_date: _date, shift_id: int) -> bool:
+            """Check if employee is available on the given date for the given shift.
+
+            Returns True if available (or no availability data), False if unavailable.
+            """
+            if emp_id not in availability_data:
+                return True  # No availability data → assume available
+
+            weekday_idx = target_date.weekday()  # 0=Mon, 6=Sun
+            day_avail = availability_data[emp_id].get(weekday_idx)
+            if day_avail is None:
+                return True  # No data for this day → assume available
+
+            if not day_avail.get("available", True):
+                return False  # Explicitly unavailable
+
+            # If available with time windows, check shift time against windows
+            time_windows = day_avail.get("time_windows", [])
+            if not time_windows:
+                return True  # Available all day
+
+            # Parse shift time range for this weekday
+            shift = shift_durations.get(shift_id)
+            if shift is None:
+                return True  # Can't determine shift time → assume OK
+
+            # Get shift STARTEND for this weekday from raw shift data
+            try:
+                shift_rec = None
+                for s in self._read("SHIFT"):
+                    if s.get("ID") == shift_id:
+                        shift_rec = s
+                        break
+                if not shift_rec:
+                    return True
+
+                # Try weekday-specific STARTEND, fall back to STARTEND0
+                startend_key = f"STARTEND{weekday_idx + 1}"
+                startend = (shift_rec.get(startend_key, "") or "").strip()
+                if not startend or "-" not in startend:
+                    startend = (shift_rec.get("STARTEND0", "") or "").strip()
+                if not startend or "-" not in startend:
+                    return True  # Can't parse → assume OK
+
+                parts = startend.split("-")
+                sh, sm = parts[0].strip().split(":")
+                eh, em = parts[1].strip().split(":")
+                shift_start = int(sh) * 60 + int(sm)
+                shift_end = int(eh) * 60 + int(em)
+                if shift_end <= shift_start:
+                    shift_end += 24 * 60  # overnight
+
+                # Check if shift fits within any availability window
+                for window in time_windows:
+                    ws = window.get("start", "")
+                    we = window.get("end", "")
+                    if not ws or not we:
+                        continue
+                    wsh, wsm = ws.split(":")
+                    weh, wem = we.split(":")
+                    win_start = int(wsh) * 60 + int(wsm)
+                    win_end = int(weh) * 60 + int(wem)
+                    if win_start <= shift_start and shift_end <= win_end:
+                        return True
+
+                return False  # Shift doesn't fit in any availability window
+            except Exception:
+                return True  # Parse error → assume available
+
+        # Track weekly hours: emp_id -> {(year, week): accumulated_hours}
+        weekly_hours_tracker: dict = {}
+
+        # Pre-populate weekly hours from existing schedule entries
+        for (eid, date_str), sid in existing_shift_map.items():
+            try:
+                d = _date.fromisoformat(date_str)
+                week_key = _get_iso_week_key(d)
+                wd_idx = d.weekday()
+                hrs = _get_shift_duration_hours(sid, wd_idx)
+                if eid not in weekly_hours_tracker:
+                    weekly_hours_tracker[eid] = {}
+                weekly_hours_tracker[eid][week_key] = (
+                    weekly_hours_tracker[eid].get(week_key, 0.0) + hrs
+                )
+            except Exception:
+                pass
 
         # Deduplicate: keep only one assignment per employee (last one in list)
         emp_assignment: dict = {}
@@ -1183,6 +1381,45 @@ class SP5Database:
                         )
                         continue
 
+                # ── Check availability ──────────────────────────
+                if not _check_availability(emp_id, target_date, shift_id):
+                    skipped_availability += 1
+                    preview.append(
+                        {
+                            "employee_id": emp_id,
+                            "employee_name": emp_names.get(emp_id, f"MA {emp_id}"),
+                            "date": date_str,
+                            "shift_id": shift_id,
+                            "shift_name": shift_names.get(shift_id, str(shift_id)),
+                            "status": "unavailable",
+                        }
+                    )
+                    continue
+
+                # ── Check weekly hours limit ────────────────────
+                max_weekly = emp_weekly_hours.get(emp_id, 0)
+                weekday_index = target_date.weekday()  # 0=Mon, 6=Sun
+                shift_hours = _get_shift_duration_hours(shift_id, weekday_index)
+                if max_weekly > 0 and shift_hours > 0:
+                    week_key = _get_iso_week_key(target_date)
+                    current_week_hours = (
+                        weekly_hours_tracker.get(emp_id, {}).get(week_key, 0.0)
+                    )
+                    if current_week_hours + shift_hours > max_weekly:
+                        skipped_hours_limit += 1
+                        preview.append(
+                            {
+                                "employee_id": emp_id,
+                                "employee_name": emp_names.get(emp_id, f"MA {emp_id}"),
+                                "date": date_str,
+                                "shift_id": shift_id,
+                                "shift_name": shift_names.get(shift_id, str(shift_id)),
+                                "status": "hours_exceeded",
+                                "detail": f"{current_week_hours:.1f}h + {shift_hours:.1f}h > {max_weekly:.1f}h/Woche",
+                            }
+                        )
+                        continue
+
                 key = (emp_id, date_str)
                 if key in existing_entries:
                     if not force:
@@ -1238,12 +1475,23 @@ class SP5Database:
                         "total": 0,
                         "weekend": 0,
                         "night": 0,
+                        "skills": list(skills_assignments.get(emp_id, set())),
+                        "weekly_hours_limit": emp_weekly_hours.get(emp_id, 0),
                     }
                 emp_stats[emp_id]["total"] += 1
                 if target_date.weekday() >= 5:
                     emp_stats[emp_id]["weekend"] += 1
                 if shift_id in night_shift_ids:
                     emp_stats[emp_id]["night"] += 1
+
+                # Update weekly hours tracker
+                if shift_hours > 0:
+                    week_key = _get_iso_week_key(target_date)
+                    if emp_id not in weekly_hours_tracker:
+                        weekly_hours_tracker[emp_id] = {}
+                    weekly_hours_tracker[emp_id][week_key] = (
+                        weekly_hours_tracker[emp_id].get(week_key, 0.0) + shift_hours
+                    )
 
                 if not dry_run:
                     try:
@@ -1259,9 +1507,25 @@ class SP5Database:
 
         # Build optimization report
         report_employees = sorted(emp_stats.values(), key=lambda x: -x["total"])
+
+        # Add weekly hours summary per employee
+        for emp in report_employees:
+            eid = emp["employee_id"]
+            weeks = weekly_hours_tracker.get(eid, {})
+            if weeks:
+                emp["weekly_hours_planned"] = {
+                    f"KW{wk[1]}": round(hrs, 1) for wk, hrs in sorted(weeks.items())
+                }
+                emp["max_weekly_hours_planned"] = round(max(weeks.values()), 1)
+                emp["avg_weekly_hours_planned"] = round(
+                    sum(weeks.values()) / len(weeks), 1
+                )
+
         report: dict = {
             "employees": report_employees,
             "skipped_restriction": skipped_restriction,
+            "skipped_availability": skipped_availability,
+            "skipped_hours_limit": skipped_hours_limit,
         }
         if len(report_employees) >= 2:
             import statistics as _stats
@@ -1298,6 +1562,8 @@ class SP5Database:
             "created": created,
             "skipped": skipped,
             "skipped_restriction": skipped_restriction,
+            "skipped_availability": skipped_availability,
+            "skipped_hours_limit": skipped_hours_limit,
             "errors": errors,
             "preview": preview,
             "report": report,
