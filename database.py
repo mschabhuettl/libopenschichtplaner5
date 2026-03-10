@@ -413,6 +413,100 @@ class SP5Database:
     def _bcrypt_path(self) -> str:
         return os.path.join(self.db_path, "5USER_BCRYPT.json")
 
+    # ── TOTP 2FA sidecar ──────────────────────────────────────
+
+    def _totp_path(self) -> str:
+        return os.path.join(self.db_path, "5USER_TOTP.json")
+
+    def _load_totp_data(self) -> dict:
+        """Load {user_id_str: {secret, backup_codes, enabled}} from sidecar."""
+        path = self._totp_path()
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_totp_data(self, data: dict) -> None:
+        path = self._totp_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def totp_get_status(self, user_id: int) -> bool:
+        """Return True if TOTP 2FA is enabled for user."""
+        data = self._load_totp_data()
+        entry = data.get(str(user_id), {})
+        return bool(entry.get("enabled"))
+
+    def totp_generate_secret(self, user_id: int) -> str:
+        """Generate and store a pending TOTP secret (not yet enabled)."""
+        import pyotp
+        secret = pyotp.random_base32()
+        data = self._load_totp_data()
+        data[str(user_id)] = {
+            "secret": secret,
+            "enabled": False,
+            "backup_codes": [],
+        }
+        self._save_totp_data(data)
+        return secret
+
+    def totp_enable(self, user_id: int, code: str) -> list[str] | None:
+        """Verify code against pending secret and enable 2FA. Returns backup codes or None."""
+        import hashlib
+        import secrets
+
+        import pyotp
+        data = self._load_totp_data()
+        entry = data.get(str(user_id))
+        if not entry or not entry.get("secret"):
+            return None
+        totp = pyotp.TOTP(entry["secret"])
+        if not totp.verify(code, valid_window=1):
+            return None
+        # Generate backup codes
+        backup_codes = [secrets.token_hex(4).upper() for _ in range(8)]
+        backup_hashes = [hashlib.sha256(c.encode()).hexdigest() for c in backup_codes]
+        entry["enabled"] = True
+        entry["backup_codes"] = backup_hashes
+        data[str(user_id)] = entry
+        self._save_totp_data(data)
+        return backup_codes
+
+    def totp_verify(self, user_id: int, code: str) -> bool:
+        """Verify a TOTP code or backup code. Returns True if valid."""
+        import hashlib
+
+        import pyotp
+        data = self._load_totp_data()
+        entry = data.get(str(user_id))
+        if not entry or not entry.get("enabled") or not entry.get("secret"):
+            return False
+        # Try TOTP code first
+        totp = pyotp.TOTP(entry["secret"])
+        if totp.verify(code, valid_window=1):
+            return True
+        # Try backup code
+        code_hash = hashlib.sha256(code.strip().upper().encode()).hexdigest()
+        if code_hash in entry.get("backup_codes", []):
+            entry["backup_codes"].remove(code_hash)
+            data[str(user_id)] = entry
+            self._save_totp_data(data)
+            return True
+        return False
+
+    def totp_disable(self, user_id: int) -> bool:
+        """Disable 2FA for a user."""
+        data = self._load_totp_data()
+        uid = str(user_id)
+        if uid in data:
+            del data[uid]
+            self._save_totp_data(data)
+            return True
+        return False
+
     def _load_bcrypt_hashes(self) -> dict[str, str]:
         """Load {user_id_str: bcrypt_hash} from sidecar file."""
         path = self._bcrypt_path()
