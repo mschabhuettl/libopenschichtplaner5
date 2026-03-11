@@ -28,6 +28,40 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .base import Base
 
 
+class Company(Base):
+    """Company / tenant — top-level organisational unit."""
+
+    __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(
+        String(200), nullable=False, unique=True, doc="Company name"
+    )
+    slug: Mapped[str] = mapped_column(
+        String(200), nullable=False, unique=True, doc="URL-safe identifier"
+    )
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime, server_default=func.now()
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Relationships
+    employees: Mapped[list["Employee"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Company(id={self.id}, name='{self.name}', slug='{self.slug}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "NAME": self.name,
+            "SLUG": self.slug,
+            "IS_ACTIVE": self.is_active,
+        }
+
+
 class Employee(Base):
     """Employee (Mitarbeiter) — maps to 5EMPL.DBF."""
 
@@ -81,6 +115,15 @@ class Employee(Base):
         String(100), default="", doc="Job title / function"
     )
 
+    # Company
+    company_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        doc="Owning company (tenant)",
+    )
+
     # Flags
     hide: Mapped[bool] = mapped_column(
         Boolean, default=False, doc="Soft-deleted / hidden"
@@ -101,6 +144,7 @@ class Employee(Base):
     )
 
     # Relationships
+    company: Mapped[Optional["Company"]] = relationship(back_populates="employees")
     group_assignments: Mapped[list["GroupAssignment"]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
