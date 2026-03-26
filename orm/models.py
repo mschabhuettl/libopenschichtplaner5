@@ -49,6 +49,9 @@ class Company(Base):
     employees: Mapped[list["Employee"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
+    groups: Mapped[list["Group"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Company(id={self.id}, name='{self.name}', slug='{self.slug}')>"
@@ -194,6 +197,15 @@ class Group(Base):
         Boolean, default=False, doc="Soft-deleted / hidden"
     )
 
+    # Company (tenant)
+    company_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+        doc="Owning company (tenant)",
+    )
+
     # Metadata
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime, server_default=func.now()
@@ -203,6 +215,7 @@ class Group(Base):
     )
 
     # Relationships
+    company: Mapped[Optional["Company"]] = relationship(back_populates="groups")
     member_assignments: Mapped[list["GroupAssignment"]] = relationship(
         back_populates="group", cascade="all, delete-orphan"
     )
