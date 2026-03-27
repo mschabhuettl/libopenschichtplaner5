@@ -5932,9 +5932,11 @@ class SP5Database:
         partner_date: str,
         note: str = "",
         status: str = "pending",
+        created_by: str = "system",
     ) -> dict:
         import datetime as _dt
 
+        now = _dt.datetime.now().isoformat(timespec="seconds")
         entries = self._load_swap_requests()
         new_id = max((e.get("id", 0) for e in entries), default=0) + 1
         entry = {
@@ -5944,19 +5946,56 @@ class SP5Database:
             "partner_id": partner_id,
             "partner_date": partner_date,
             "note": note,
-            "status": status,  # pending_partner | pending | approved | rejected | cancelled
+            "status": status,  # pending_partner | pending | approved | rejected | cancelled | expired
             "partner_accepted": None if status == "pending_partner" else True,
-            "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "created_at": now,
             "resolved_at": None,
             "resolved_by": None,
             "reject_reason": "",
+            "status_history": [
+                {
+                    "status": status,
+                    "changed_at": now,
+                    "changed_by": created_by,
+                    "reason": "",
+                }
+            ],
         }
         entries.append(entry)
         self._save_swap_requests(entries)
         return entry
 
+    def _add_status_history(
+        self,
+        entry: dict,
+        new_status: str,
+        changed_by: str,
+        reason: str = "",
+    ) -> None:
+        """Append a status change record to entry['status_history'] (in-place)."""
+        import datetime as _dt
+
+        if "status_history" not in entry:
+            entry["status_history"] = []
+        entry["status_history"].append(
+            {
+                "status": new_status,
+                "changed_at": _dt.datetime.now().isoformat(timespec="seconds"),
+                "changed_by": changed_by,
+                "reason": reason,
+            }
+        )
+
+    def get_swap_request_history(self, swap_id: int) -> list[dict] | None:
+        """Return the status history for a specific swap request, or None if not found."""
+        entries = self._load_swap_requests()
+        for entry in entries:
+            if entry.get("id") == swap_id:
+                return entry.get("status_history", [])
+        return None
+
     def partner_respond_swap(
-        self, swap_id: int, accept: bool
+        self, swap_id: int, accept: bool, partner_name: str = "partner"
     ) -> dict | None:
         """Partner accepts or declines a swap request.
         If accepted: status changes from pending_partner → pending.
@@ -5970,14 +6009,18 @@ class SP5Database:
                     return None
                 entry["partner_accepted"] = accept
                 if accept:
-                    entry["status"] = "pending"
+                    new_status = "pending"
+                    reason = ""
                 else:
-                    entry["status"] = "rejected"
+                    new_status = "rejected"
+                    reason = "Partner hat abgelehnt"
                     entry["resolved_at"] = _dt.datetime.now().isoformat(
                         timespec="seconds"
                     )
-                    entry["resolved_by"] = "partner"
-                    entry["reject_reason"] = "Partner hat abgelehnt"
+                    entry["resolved_by"] = partner_name
+                    entry["reject_reason"] = reason
+                entry["status"] = new_status
+                self._add_status_history(entry, new_status, partner_name, reason)
                 self._save_swap_requests(entries)
                 return entry
         return None
@@ -5997,22 +6040,58 @@ class SP5Database:
             if entry.get("id") == swap_id:
                 if entry["status"] != "pending":
                     return None  # already resolved
-                entry["status"] = "approved" if action == "approve" else "rejected"
+                new_status = "approved" if action == "approve" else "rejected"
+                entry["status"] = new_status
                 entry["resolved_at"] = _dt.datetime.now().isoformat(timespec="seconds")
                 entry["resolved_by"] = resolved_by
                 entry["reject_reason"] = reject_reason
+                self._add_status_history(entry, new_status, resolved_by, reject_reason)
                 self._save_swap_requests(entries)
                 return entry
         return None
 
-    def cancel_swap_request(self, swap_id: int) -> int:
+    def cancel_swap_request(self, swap_id: int, cancelled_by: str = "user") -> int:
         entries = self._load_swap_requests()
         for entry in entries:
             if entry.get("id") == swap_id:
                 entry["status"] = "cancelled"
+                self._add_status_history(entry, "cancelled", cancelled_by, "")
                 self._save_swap_requests(entries)
                 return 1
         return 0
+
+    def expire_old_swap_requests(self, max_age_days: int = 7) -> list[int]:
+        """Set status='expired' on all pending/pending_partner requests older than max_age_days.
+
+        Returns list of expired swap IDs.
+        """
+        import datetime as _dt
+
+        cutoff = _dt.datetime.now() - _dt.timedelta(days=max_age_days)
+        entries = self._load_swap_requests()
+        expired_ids: list[int] = []
+        for entry in entries:
+            if entry.get("status") not in ("pending", "pending_partner"):
+                continue
+            created_raw = entry.get("created_at", "")
+            try:
+                created = _dt.datetime.fromisoformat(created_raw)
+            except (ValueError, TypeError):
+                continue
+            if created < cutoff:
+                entry["status"] = "expired"
+                entry["resolved_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+                entry["resolved_by"] = "system"
+                self._add_status_history(
+                    entry,
+                    "expired",
+                    "system",
+                    f"Automatisch abgelaufen nach {max_age_days} Tagen",
+                )
+                expired_ids.append(entry["id"])
+        if expired_ids:
+            self._save_swap_requests(entries)
+        return expired_ids
 
     def delete_swap_request(self, swap_id: int) -> int:
         entries = self._load_swap_requests()
