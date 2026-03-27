@@ -6097,3 +6097,80 @@ class SP5Database:
         if info is None:
             return None
         return info.get("employee_id")
+
+    # ── Schichtplan-Kommentare (Q069) ─────────────────────────
+
+    def _schedule_comments_path(self) -> str:
+        data_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+        )
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, "schedule_comments.json")
+
+    def _load_schedule_comments(self) -> list[dict]:
+        path = self._schedule_comments_path()
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_schedule_comments(self, entries: list[dict]) -> None:
+        path = self._schedule_comments_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+
+    def get_schedule_comments(
+        self,
+        group_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Return schedule comments, optionally filtered by group and date range."""
+        entries = self._load_schedule_comments()
+        if group_id is not None:
+            entries = [e for e in entries if e.get("group_id") == group_id]
+        if date_from:
+            entries = [e for e in entries if e.get("date", "") >= date_from]
+        if date_to:
+            entries = [e for e in entries if e.get("date", "") <= date_to]
+        return entries
+
+    def add_schedule_comment(
+        self,
+        date: str,
+        group_id: int,
+        text: str,
+        author: str = "",
+    ) -> dict:
+        """Add a comment for a given date+group. Replaces existing comment for same date+group."""
+        entries = self._load_schedule_comments()
+        # Remove existing comment for same date+group (one per day per group rule)
+        entries = [
+            e for e in entries
+            if not (e.get("date") == date and e.get("group_id") == group_id)
+        ]
+        # Generate new id
+        max_id = max((e.get("id", 0) for e in entries), default=0)
+        new_entry = {
+            "id": max_id + 1,
+            "date": date,
+            "group_id": group_id,
+            "text": text,
+            "author": author,
+            "created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        }
+        entries.append(new_entry)
+        self._save_schedule_comments(entries)
+        return new_entry
+
+    def delete_schedule_comment(self, comment_id: int) -> int:
+        """Delete a comment by ID. Returns number deleted (0 or 1)."""
+        entries = self._load_schedule_comments()
+        new_entries = [e for e in entries if e.get("id") != comment_id]
+        deleted = len(entries) - len(new_entries)
+        if deleted:
+            self._save_schedule_comments(new_entries)
+        return deleted
