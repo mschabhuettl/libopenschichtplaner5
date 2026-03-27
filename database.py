@@ -2785,13 +2785,11 @@ class SP5Database:
         return True
 
     def delete_employee(self, emp_id: int) -> int:
-        """Soft-delete (hide) an employee and cascade-delete their related records.
+        """Soft-delete (deactivate) an employee by setting HIDE=1.
 
-        Cascades:
-        - MASHI, SPSHI, ABSEN: all entries for this employee are hard-deleted
-        - BOOK: all bookings for this employee are hard-deleted
-        - Wishes (JSON): all wishes for this employee are removed
-        - CYASS: cycle assignments for this employee are removed
+        Historical data (shifts, absences, bookings) is preserved so that
+        past schedules and reports remain accurate.  Only the employee
+        record itself is marked as hidden/inactive.
         """
         filepath = self._table("EMPL")
         fields = get_table_fields(filepath)
@@ -2799,38 +2797,20 @@ class SP5Database:
         if raw_idx is None:
             return 0
         update_record(filepath, fields, raw_idx, {"HIDE": 1})
-        # Cascade: remove schedule, absence, booking, cycle-assignment records
-        for table in ("MASHI", "SPSHI", "ABSEN"):
-            t_path = self._table(table)
-            t_fields = get_table_fields(t_path)
-            matches = find_all_records(t_path, t_fields, EMPLOYEEID=emp_id)
-            for idx, _ in reversed(matches):  # reverse to keep indices stable
-                delete_record(t_path, t_fields, idx)
-        # BOOK table uses EMPLOYEEID too
-        book_path = self._table("BOOK")
-        book_fields = get_table_fields(book_path)
-        book_matches = find_all_records(book_path, book_fields, EMPLOYEEID=emp_id)
-        for idx, _ in reversed(book_matches):
-            delete_record(book_path, book_fields, idx)
-        # CYASS: cycle assignments
-        cyass_path = self._table("CYASS")
-        cyass_fields = get_table_fields(cyass_path)
-        cyass_matches = find_all_records(cyass_path, cyass_fields, EMPLOYEEID=emp_id)
-        for idx, _ in reversed(cyass_matches):
-            delete_record(cyass_path, cyass_fields, idx)
-        # Wishes (JSON file)
-        wishes_path = self._wishes_path()
-        if os.path.exists(wishes_path):
-            try:
-                import json as _json
+        self._invalidate_cache("EMPL")
+        return 1
 
-                with open(wishes_path, encoding="utf-8") as f:
-                    wishes = _json.load(f)
-                wishes = [w for w in wishes if w.get("employee_id") != emp_id]
-                with open(wishes_path, "w", encoding="utf-8") as f:
-                    _json.dump(wishes, f, ensure_ascii=False)
-            except Exception:
-                pass  # non-fatal: wishes file might not exist or be malformed
+    def activate_employee(self, emp_id: int) -> int:
+        """Reactivate a soft-deleted (hidden) employee by setting HIDE=0.
+
+        Returns 1 if the employee was found and reactivated, 0 otherwise.
+        """
+        filepath = self._table("EMPL")
+        fields = get_table_fields(filepath)
+        raw_idx, existing = self._find_record("EMPL", emp_id)
+        if raw_idx is None:
+            return 0
+        update_record(filepath, fields, raw_idx, {"HIDE": 0})
         self._invalidate_cache("EMPL")
         return 1
 
