@@ -10,6 +10,7 @@ import threading
 from datetime import datetime
 from typing import Any
 
+from . import _resource_paths as _paths
 from .color_utils import bgr_to_hex, is_light_color
 from .dbf_reader import get_table_fields, read_dbf
 from .dbf_writer import append_record, delete_record, find_all_records, update_record
@@ -1199,9 +1200,7 @@ class SP5Database:
         # ── Load availability data ──────────────────────────────
         availability_data: dict = {}  # emp_id (int) -> {day(0-6): {available, time_windows}}
         try:
-            avail_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "api", "data", "availability.json"
-            )
+            avail_path = os.path.join(_paths.api_data_dir(), "availability.json")
             if os.path.exists(avail_path):
                 with open(avail_path) as f:
                     raw_avail = json.load(f)
@@ -1225,9 +1224,7 @@ class SP5Database:
         # ── Load skills data ────────────────────────────────────
         skills_assignments: dict = {}  # emp_id -> set of skill_ids
         try:
-            skills_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "api", "data", "skills.json"
-            )
+            skills_path = os.path.join(_paths.api_data_dir(), "skills.json")
             if os.path.exists(skills_path):
                 with open(skills_path) as f:
                     skills_data = json.load(f)
@@ -5201,11 +5198,7 @@ class SP5Database:
 
     def _changelog_path(self) -> str:
         """Path to changelog.json file next to the database directory."""
-        data_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-        )
-        os.makedirs(data_dir, exist_ok=True)
-        return os.path.join(data_dir, "changelog.json")
+        return os.path.join(_paths.data_dir(), "changelog.json")
 
     def get_changelog(
         self,
@@ -5886,11 +5879,7 @@ class SP5Database:
     # ── Schicht-Tauschbörse ───────────────────────────────────
 
     def _swap_requests_path(self) -> str:
-        data_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-        )
-        os.makedirs(data_dir, exist_ok=True)
-        return os.path.join(data_dir, "swap_requests.json")
+        return os.path.join(_paths.data_dir(), "swap_requests.json")
 
     def _load_swap_requests(self) -> list[dict]:
         path = self._swap_requests_path()
@@ -6180,11 +6169,7 @@ class SP5Database:
     # ── Schichtplan-Kommentare (Q069) ─────────────────────────
 
     def _schedule_comments_path(self) -> str:
-        data_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
-        )
-        os.makedirs(data_dir, exist_ok=True)
-        return os.path.join(data_dir, "schedule_comments.json")
+        return os.path.join(_paths.data_dir(), "schedule_comments.json")
 
     def _load_schedule_comments(self) -> list[dict]:
         path = self._schedule_comments_path()

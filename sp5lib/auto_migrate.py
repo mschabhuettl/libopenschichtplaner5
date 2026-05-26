@@ -21,14 +21,22 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ._resource_paths import backend_dir as _backend_dir
+
 _log = logging.getLogger("sp5api.auto_migrate")
 
 # The current app schema version — bump this when adding new migrations.
 # Format: Alembic revision head. We read it dynamically from Alembic.
 APP_SCHEMA_VERSION = "head"
 
-# Backend root directory (where alembic.ini lives)
-_BACKEND_DIR = Path(__file__).resolve().parent.parent
+def _backend_path() -> Path:
+    """Backend root directory (where alembic.ini lives), resolved lazily.
+
+    Honors SP5_BACKEND_DIR so the host app can point at its alembic/ tree when this
+    package is installed standalone. Evaluated on each call so it picks up the env
+    var regardless of import order.
+    """
+    return Path(_backend_dir())
 
 
 def _is_auto_migrate_enabled() -> bool:
@@ -49,7 +57,7 @@ def _get_alembic_head() -> str | None:
         from alembic.config import Config
         from alembic.script import ScriptDirectory
 
-        alembic_cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
+        alembic_cfg = Config(str(_backend_path() / "alembic.ini"))
         script = ScriptDirectory.from_config(alembic_cfg)
         head = script.get_current_head()
         return head
@@ -83,7 +91,7 @@ def _create_pg_backup(database_url: str) -> str | None:
 
     Returns the backup file path on success, None on failure.
     """
-    backup_dir = _BACKEND_DIR / "backups" / "pre_migration"
+    backup_dir = _backend_path() / "backups" / "pre_migration"
     backup_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     backup_file = backup_dir / f"pre_migration_{timestamp}.sql"
@@ -132,7 +140,7 @@ def _create_dbf_backup(db_path: str) -> str | None:
         _log.warning("DBF path does not exist, skipping backup: %s", db_path)
         return None
 
-    backup_base = _BACKEND_DIR / "backups" / "pre_migration"
+    backup_base = _backend_path() / "backups" / "pre_migration"
     backup_base.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     backup_dir = backup_base / f"dbf_pre_migration_{timestamp}"
@@ -153,7 +161,7 @@ def _run_alembic_upgrade() -> list[str]:
         from alembic import command
         from alembic.config import Config
 
-        alembic_cfg = Config(str(_BACKEND_DIR / "alembic.ini"))
+        alembic_cfg = Config(str(_backend_path() / "alembic.ini"))
         # Ensure DATABASE_URL is in the config
         database_url = os.environ.get("DATABASE_URL")
         if database_url:
