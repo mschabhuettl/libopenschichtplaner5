@@ -15,6 +15,7 @@ environment variables (see .env.example):
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import smtplib
@@ -115,6 +116,21 @@ _HTML_TEMPLATE = """\
 """
 
 
+def _safe_href(link: str, app_url: str) -> str | None:
+    """Return an escaped, scheme-safe href for *link*, or None if unsafe.
+
+    Relative links are made absolute against *app_url*. Absolute links are only
+    accepted for the http/https schemes to prevent ``javascript:``/``data:`` URIs
+    from being injected into the CTA button.
+    """
+    href = link if link.startswith("http") else f"{app_url}{link}"
+    scheme = href.split(":", 1)[0].lower() if ":" in href else ""
+    # Relative (no scheme) or explicitly http(s) are allowed; everything else is rejected.
+    if scheme and scheme not in ("http", "https"):
+        return None
+    return html.escape(href, quote=True)
+
+
 def _render_html(
     title: str,
     message: str,
@@ -123,14 +139,18 @@ def _render_html(
 ) -> str:
     cta_html = ""
     if link:
-        # Make relative links absolute
-        href = link if link.startswith("http") else f"{app_url}{link}"
-        cta_html = f'<p><a class="cta" href="{href}">Jetzt ansehen →</a></p>'
+        href = _safe_href(link, app_url)
+        if href is not None:
+            cta_html = f'<p><a class="cta" href="{href}">Jetzt ansehen →</a></p>'
+    # Escape user-influenced content before injecting into the HTML template to
+    # prevent stored HTML/script injection in notification emails. The newline→<br>
+    # conversion happens after escaping so the inserted <br> tags survive.
+    safe_message = html.escape(message).replace("\n", "<br>")
     return _HTML_TEMPLATE.format(
-        title=title,
-        message=message.replace("\n", "<br>"),
+        title=html.escape(title),
+        message=safe_message,
         cta_html=cta_html,
-        app_url=app_url,
+        app_url=html.escape(app_url),
     )
 
 
