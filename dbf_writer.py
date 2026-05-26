@@ -116,8 +116,16 @@ def _encode_field(value: Any, field: dict) -> bytes:
                 fmt = f"{{:>{flen}d}}"
                 s = fmt.format(int(float(value)))
         except (ValueError, TypeError):
-            s = " " * flen
-        return s.encode("ascii")[:flen]
+            return b" " * flen
+        # A right-aligned numeric format never truncates an over-wide value, so
+        # slicing it would silently drop the *high-order* digits/sign and corrupt
+        # the stored magnitude (e.g. 99999 -> "9999"). Refuse instead of corrupting.
+        if len(s) > flen:
+            raise ValueError(
+                f"Numeric value {value!r} does not fit field "
+                f"{field.get('name', '?')} (len={flen}, dec={fdec})"
+            )
+        return s.encode("ascii")
 
     elif ftype == "L":
         return b"T" if value else b"F"

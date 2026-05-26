@@ -4,6 +4,7 @@ Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
 
 import struct
+from datetime import date
 from typing import Any
 
 
@@ -63,14 +64,21 @@ def _decode_string(raw: bytes) -> str:
 
 
 def _parse_date(raw: str) -> str | None:
-    """Parse dBASE date string YYYYMMDD to ISO format."""
+    """Parse dBASE date string YYYYMMDD to ISO format.
+
+    Returns None for anything that is not a real calendar date. Full calendar
+    validation (via :class:`datetime.date`) rejects impossible dates such as
+    ``20230231`` (Feb 31), which the previous ``day <= 31`` check let through and
+    which would later crash ``date.fromisoformat`` downstream.
+    """
     s = raw.strip()
     if len(s) == 8 and s.isdigit():
         try:
             year, month, day = int(s[:4]), int(s[4:6]), int(s[6:8])
-            if 1 <= month <= 12 and 1 <= day <= 31 and year > 0:
-                return f"{year:04d}-{month:02d}-{day:02d}"
-        except Exception:
+            if year > 0:
+                # Constructing date() validates month/day for the given month/year.
+                return date(year, month, day).isoformat()
+        except ValueError:
             pass
     return None
 
