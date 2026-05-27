@@ -8,7 +8,6 @@ models already defined in models.py.
 
 from sqlalchemy import (
     Boolean,
-    Float,
     Integer,
     LargeBinary,
     String,
@@ -24,8 +23,11 @@ from .base import Base
 # working unchanged. ScheduleEntry is the legacy name for ShiftAssignment.
 from .models import (  # noqa: F401,E402
     Absence,
+    AccountBooking,
     Holiday,
+    LeaveEntitlement,
     LeaveType,
+    OvertimeEntry,
     Period,
     Shift,
     ShiftAssignment,
@@ -33,10 +35,14 @@ from .models import (  # noqa: F401,E402
     Workplace,
 )
 
-# Backward-compatible alias: the MASHI master-schedule model was previously
-# called ScheduleEntry. It is now ShiftAssignment (same table "schedule_entries",
-# same columns); keep the old name importable for existing consumers.
+# Backward-compatible aliases for models that were renamed when they moved to
+# models.py (same tables, same columns) — keep the old names importable:
+#   ScheduleEntry  -> ShiftAssignment (5MASHI, "schedule_entries")
+#   Booking        -> AccountBooking  (5BOOK,  "bookings_pg")
+#   OvertimeRecord -> OvertimeEntry   (5OVER,  "overtime_records")
 ScheduleEntry = ShiftAssignment
+Booking = AccountBooking
+OvertimeRecord = OvertimeEntry
 
 
 class User(Base):
@@ -110,35 +116,6 @@ class Note(Base):
     text1: Mapped[str | None] = mapped_column(Text, default="")
     text2: Mapped[str | None] = mapped_column(Text, default="")
     category: Mapped[str | None] = mapped_column(String(20), default="")
-
-
-class Booking(Base):
-    __tablename__ = "bookings_pg"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    booking_type: Mapped[int] = mapped_column(Integer, default=0)
-    value: Mapped[float] = mapped_column(Float, default=0.0)
-    note: Mapped[str | None] = mapped_column(Text, default="")
-
-
-class OvertimeRecord(Base):
-    __tablename__ = "overtime_records"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    hours: Mapped[float] = mapped_column(Float, default=0.0)
-
-
-class LeaveEntitlement(Base):
-    __tablename__ = "leave_entitlements"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    year: Mapped[int] = mapped_column(Integer, nullable=False)
-    leave_type_id: Mapped[int] = mapped_column(Integer, default=0)
-    entitlement: Mapped[float] = mapped_column(Float, default=0.0)
-    carry_forward: Mapped[float] = mapped_column(Float, default=0.0)
-    in_days: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Restriction(Base):

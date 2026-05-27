@@ -87,8 +87,9 @@ This initial implementation covers:
 2. ✅ **Phase 2**: ORM models + repositories + DBF sync for Shifts, LeaveTypes, Workplaces
 3. ✅ **Phase 3**: ORM models + repositories + DBF sync for Schedule entries (MASHI → ShiftAssignment, SPSHI → SpecialShift, ABSEN → Absence)
 4. ✅ **Phase 4**: ORM models + repositories + DBF sync for reference tables (5HOLID → Holiday, 5PERIO → Period); `sync_all()` now runs over all tables
-5. **Next**: Wire ORM repositories into FastAPI routers (dual-read) — app-side
-6. **Later**: Switch write path to ORM, keep DBF sync for legacy; then drop the DBF dependency and run on PostgreSQL
+5. ✅ **Phase 5**: ORM models + repositories + DBF sync for account/overtime/entitlements (5BOOK → AccountBooking, 5OVER → OvertimeEntry, 5LEAEN → LeaveEntitlement); `sync_all()` covers 14 tables
+6. **Next**: Wire ORM repositories into FastAPI routers (dual-read) — app-side
+7. **Later**: Switch write path to ORM, keep DBF sync for legacy; then drop the DBF dependency and run on PostgreSQL
 
 ## Usage Example
 

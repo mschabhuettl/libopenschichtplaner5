@@ -20,12 +20,15 @@ Usage:
 from .base import Base, get_engine, get_session, init_db
 from .models import (
     Absence,
+    AccountBooking,
     Company,
     Employee,
     Group,
     GroupAssignment,
     Holiday,
+    LeaveEntitlement,
     LeaveType,
+    OvertimeEntry,
     Period,
     Shift,
     ShiftAssignment,
@@ -34,10 +37,13 @@ from .models import (
 )
 from .repository import (
     AbsenceRepository,
+    AccountBookingRepository,
     EmployeeRepository,
     GroupRepository,
     HolidayRepository,
+    LeaveEntitlementRepository,
     LeaveTypeRepository,
+    OvertimeEntryRepository,
     PeriodRepository,
     ShiftAssignmentRepository,
     ShiftRepository,
@@ -45,8 +51,10 @@ from .repository import (
     WorkplaceRepository,
 )
 
-# Legacy alias for the MASHI master-schedule model (now ShiftAssignment).
+# Legacy aliases for models renamed when they moved to models.py (same tables).
 ScheduleEntry = ShiftAssignment
+Booking = AccountBooking
+OvertimeRecord = OvertimeEntry
 
 __all__ = [
     # Engine / session / schema
@@ -70,6 +78,12 @@ __all__ = [
     # Reference (Phase 4) models
     "Holiday",
     "Period",
+    # Account / overtime / entitlement (Phase 5) models
+    "AccountBooking",
+    "Booking",
+    "OvertimeEntry",
+    "OvertimeRecord",
+    "LeaveEntitlement",
     # Repositories
     "EmployeeRepository",
     "GroupRepository",
@@ -81,4 +95,7 @@ __all__ = [
     "AbsenceRepository",
     "HolidayRepository",
     "PeriodRepository",
+    "AccountBookingRepository",
+    "OvertimeEntryRepository",
+    "LeaveEntitlementRepository",
 ]

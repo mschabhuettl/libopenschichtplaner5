@@ -569,3 +569,101 @@ class Period(Base):
             "COLOR": self.color,
             "DESCRIPT": self.description or "",
         }
+
+
+# ── Phase 5: account bookings, overtime, leave entitlements ──────────────────
+# Defined canonically here and re-exported from models_pg.py, where the former
+# names Booking / OvertimeRecord remain available as aliases. References
+# (employee_id / leave_type_id) are plain indexed integers without DB-level FK
+# constraints, consistent with the other roster tables.
+
+
+class AccountBooking(Base):
+    """Manual account / time booking — maps to 5BOOK.DBF."""
+
+    __tablename__ = "bookings_pg"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    booking_type: Mapped[int] = mapped_column(Integer, default=0, doc="DBF TYPE")
+    value: Mapped[float] = mapped_column(Float, default=0.0, doc="DBF VALUE")
+    note: Mapped[str | None] = mapped_column(Text, default="", doc="DBF NOTE")
+
+    __table_args__ = (
+        Index("idx_book_emp_date", "employee_id", "date"),
+        Index("idx_book_date", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AccountBooking(id={self.id}, emp={self.employee_id}, date='{self.date}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "EMPLOYEEID": self.employee_id,
+            "DATE": self.date,
+            "TYPE": self.booking_type,
+            "VALUE": self.value,
+            "NOTE": self.note or "",
+        }
+
+
+class OvertimeEntry(Base):
+    """Manual overtime adjustment — maps to 5OVER.DBF."""
+
+    __tablename__ = "overtime_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    hours: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        Index("idx_overtime_emp_date", "employee_id", "date"),
+        Index("idx_overtime_date", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<OvertimeEntry(id={self.id}, emp={self.employee_id}, hours={self.hours})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "EMPLOYEEID": self.employee_id,
+            "DATE": self.date,
+            "HOURS": self.hours,
+        }
+
+
+class LeaveEntitlement(Base):
+    """Annual leave entitlement per employee — maps to 5LEAEN.DBF.
+
+    DBF fields: ENTITLEMNT (entitlement), REST (carry_forward), INDAYS (in_days).
+    """
+
+    __tablename__ = "leave_entitlements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    leave_type_id: Mapped[int] = mapped_column(Integer, default=0)
+    entitlement: Mapped[float] = mapped_column(Float, default=0.0, doc="DBF ENTITLEMNT")
+    carry_forward: Mapped[float] = mapped_column(Float, default=0.0, doc="DBF REST")
+    in_days: Mapped[bool] = mapped_column(Boolean, default=True, doc="DBF INDAYS")
+
+    __table_args__ = (Index("idx_leaen_emp_year", "employee_id", "year"),)
+
+    def __repr__(self) -> str:
+        return f"<LeaveEntitlement(id={self.id}, emp={self.employee_id}, year={self.year})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "EMPLOYEEID": self.employee_id,
+            "YEAR": self.year,
+            "LEAVETYPID": self.leave_type_id,
+            "ENTITLEMNT": self.entitlement,
+            "REST": self.carry_forward,
+            "INDAYS": self.in_days,
+        }

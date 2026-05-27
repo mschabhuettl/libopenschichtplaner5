@@ -15,13 +15,19 @@ import pytest
 from sp5lib.orm import (
     Absence,
     AbsenceRepository,
+    AccountBooking,
+    AccountBookingRepository,
     Employee,
     Group,
     GroupAssignment,
     Holiday,
     HolidayRepository,
+    LeaveEntitlement,
+    LeaveEntitlementRepository,
     LeaveType,
     LeaveTypeRepository,
+    OvertimeEntry,
+    OvertimeEntryRepository,
     Period,
     PeriodRepository,
     ScheduleEntry,
@@ -552,3 +558,138 @@ def test_sync_all_includes_phase4_tables(engine, monkeypatch):
     stats = sync.sync_all(engine, "/x")
     assert stats["holidays"] == 1
     assert stats["periods"] == 1
+
+
+# ─── Phase 5: bookings / overtime / leave entitlements ──────────────────────────
+
+
+def test_init_db_creates_phase5_tables(engine):
+    from sqlalchemy import inspect
+
+    tables = set(inspect(engine).get_table_names())
+    assert {"bookings_pg", "overtime_records", "leave_entitlements"} <= tables
+
+
+def test_phase5_legacy_aliases():
+    from sp5lib.orm import Booking, OvertimeRecord, models_pg
+
+    assert Booking is AccountBooking
+    assert OvertimeRecord is OvertimeEntry
+    assert models_pg.Booking is AccountBooking
+    assert models_pg.OvertimeRecord is OvertimeEntry
+    assert models_pg.LeaveEntitlement is LeaveEntitlement
+
+
+def test_account_booking_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                AccountBooking(id=1, employee_id=10, date="2026-01-05", value=2.5),
+                AccountBooking(id=2, employee_id=10, date="2026-02-10", value=-1.0),
+                AccountBooking(id=3, employee_id=20, date="2026-01-20", value=8.0),
+            ]
+        )
+        session.flush()
+        repo = AccountBookingRepository(session)
+        assert [b.id for b in repo.list()] == [1, 3, 2]  # by date
+        assert [b.id for b in repo.list(employee_id=10)] == [1, 2]
+        assert [b.id for b in repo.list(date_from="2026-01-01", date_to="2026-01-31")] == [1, 3]
+        assert repo.get(3).value == 8.0
+        assert repo.get(99) is None
+
+
+def test_overtime_entry_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                OvertimeEntry(id=1, employee_id=10, date="2026-01-31", hours=5.0),
+                OvertimeEntry(id=2, employee_id=11, date="2026-02-28", hours=-2.0),
+            ]
+        )
+        session.flush()
+        repo = OvertimeEntryRepository(session)
+        assert [o.id for o in repo.list(employee_id=10)] == [1]
+        assert [o.id for o in repo.list(date_from="2026-02-01")] == [2]
+        assert repo.get(1).hours == 5.0
+
+
+def test_leave_entitlement_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                LeaveEntitlement(id=1, employee_id=10, year=2025, leave_type_id=1, entitlement=30.0),
+                LeaveEntitlement(id=2, employee_id=10, year=2026, leave_type_id=1, entitlement=32.0),
+                LeaveEntitlement(id=3, employee_id=20, year=2026, leave_type_id=1, entitlement=28.0),
+            ]
+        )
+        session.flush()
+        repo = LeaveEntitlementRepository(session)
+        assert [e.id for e in repo.list(year=2026)] == [2, 3]
+        assert [e.id for e in repo.list(employee_id=10)] == [1, 2]
+        assert [e.id for e in repo.list(year=2026, employee_id=10)] == [2]
+        assert repo.get(1).entitlement == 30.0
+
+
+def test_phase5_to_dict_mirror_dbf_keys():
+    assert AccountBooking(id=1, employee_id=10, date="2026-01-05", booking_type=2,
+                          value=2.5, note="x").to_dict() == {
+        "ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-05", "TYPE": 2, "VALUE": 2.5, "NOTE": "x",
+    }
+    assert OvertimeEntry(id=1, employee_id=10, date="2026-01-31", hours=5.0).to_dict() == {
+        "ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-31", "HOURS": 5.0,
+    }
+    d = LeaveEntitlement(id=1, employee_id=10, year=2026, leave_type_id=1,
+                         entitlement=30.0, carry_forward=2.0, in_days=True).to_dict()
+    assert d == {
+        "ID": 1, "EMPLOYEEID": 10, "YEAR": 2026, "LEAVETYPID": 1,
+        "ENTITLEMNT": 30.0, "REST": 2.0, "INDAYS": True,
+    }
+
+
+def test_sync_book_overtime_entitlements(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "BOOK": [
+                {"ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-05", "TYPE": 1,
+                 "VALUE": 2.5, "NOTE": "Gutschrift"},
+                {"ID": 2, "EMPLOYEEID": 10, "DATE": "", "VALUE": 1.0},  # invalid date -> skip
+            ],
+            "OVER": [
+                {"ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-31", "HOURS": 5.0},
+            ],
+            "LEAEN": [
+                {"ID": 1, "EMPLOYEEID": 10, "YEAR": 2026, "LEAVETYPID": 1,
+                 "ENTITLEMNT": 30.0, "REST": 2.5, "INDAYS": True},
+            ],
+        },
+    )
+    with session_scope(engine) as session:
+        assert sync.sync_book(session, "/x") == 1            # one skipped (blank date)
+        assert sync.sync_overtime(session, "/x") == 1
+        assert sync.sync_leave_entitlements(session, "/x") == 1
+        assert AccountBookingRepository(session).get(1).note == "Gutschrift"
+        assert OvertimeEntryRepository(session).get(1).hours == 5.0
+        le = LeaveEntitlementRepository(session).get(1)
+        assert le.entitlement == 30.0 and le.carry_forward == 2.5 and le.in_days is True
+
+
+def test_sync_all_includes_phase5_tables(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "BOOK": [{"ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-05", "VALUE": 2.5}],
+            "OVER": [{"ID": 1, "EMPLOYEEID": 10, "DATE": "2026-01-31", "HOURS": 5.0}],
+            "LEAEN": [{"ID": 1, "EMPLOYEEID": 10, "YEAR": 2026, "ENTITLEMNT": 30.0}],
+        },
+    )
+    stats = sync.sync_all(engine, "/x")
+    assert stats["bookings"] == 1
+    assert stats["overtime"] == 1
+    assert stats["leave_entitlements"] == 1
+    # full table coverage: 14 logical tables in sync_all
+    assert len(stats) == 14
