@@ -17,15 +17,19 @@ Usage:
 import logging
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .base import get_session
 from .models import (
+    Absence,
     Employee,
     Group,
     GroupAssignment,
     LeaveType,
     Shift,
+    ShiftAssignment,
+    SpecialShift,
     Workplace,
 )
 
@@ -44,6 +48,21 @@ def _read_dbf(daten_path: str, table_name: str) -> list[dict[str, Any]]:
     except Exception as exc:
         _log.warning("Could not read %s: %s", path, exc)
         return []
+
+
+def _valid_date(value: Any) -> str | None:
+    """Return a normalised ISO date string, or None for empty/invalid input.
+
+    read_dbf already parses DBF 'D' fields to 'YYYY-MM-DD' (or None for invalid
+    calendar dates). This guards the schedule sync against blank/garbage dates.
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    # Expect ISO 'YYYY-MM-DD'; reject anything that is not a plausible date.
+    if len(s) != 10 or s[4] != "-" or s[7] != "-":
+        return None
+    return s
 
 
 def sync_employees(session: Session, daten_path: str) -> int:
@@ -97,10 +116,19 @@ def sync_employees(session: Session, daten_path: str) -> int:
 
 
 def sync_groups(session: Session, daten_path: str) -> int:
-    """Sync groups from 5GROUP.DBF into the ORM groups table."""
+    """Sync groups from 5GROUP.DBF into the ORM groups table.
+
+    ``super_id`` (the self-referential parent FK) is resolved in a second pass
+    against the full set of known group IDs. A reference to a group that does
+    not exist (dangling reference in dirty legacy data) is set to NULL and
+    logged, instead of raising ``FOREIGN KEY constraint failed`` and aborting
+    the whole sync. The two-pass approach also makes ordering irrelevant
+    (parents may appear after their children in the DBF).
+    """
     rows = _read_dbf(daten_path, "GROUP")
     count = 0
 
+    # Pass 1: upsert scalar columns; defer super_id until all groups exist.
     for r in rows:
         group_id = r.get("ID")
         if not group_id:
@@ -113,10 +141,30 @@ def sync_groups(session: Session, daten_path: str) -> int:
 
         group.name = str(r.get("NAME") or "").strip()
         group.shortname = str(r.get("SHORTNAME") or "").strip()
-        group.super_id = r.get("SUPERID") or None
+        group.super_id = None
         group.position = r.get("POSITION", 0) or 0
         group.hide = bool(r.get("HIDE"))
         count += 1
+
+    session.flush()
+
+    # Pass 2: resolve super_id against the now-complete set of group IDs.
+    valid_ids = set(session.scalars(select(Group.id)).all())
+    for r in rows:
+        group_id = r.get("ID")
+        if not group_id:
+            continue
+        super_id = r.get("SUPERID") or None
+        if super_id and super_id not in valid_ids:
+            _log.warning(
+                "group %s references missing super_id %s — setting NULL",
+                group_id,
+                super_id,
+            )
+            super_id = None
+        if super_id:
+            group = session.get(Group, group_id)
+            group.super_id = super_id
 
     session.flush()
     return count
@@ -236,6 +284,122 @@ def sync_workplaces(session: Session, daten_path: str) -> int:
     return count
 
 
+def sync_shift_assignments(session: Session, daten_path: str) -> int:
+    """Sync regular schedule entries from 5MASHI.DBF.
+
+    Rows with a blank/invalid DATE are skipped and logged. employee_id /
+    shift_id / workplace_id are stored as plain integers (no FK constraint),
+    so dangling references in dirty data do not break the sync.
+    """
+    rows = _read_dbf(daten_path, "MASHI")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        entry_id = r.get("ID")
+        if not entry_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        entry = session.get(ShiftAssignment, entry_id)
+        if entry is None:
+            entry = ShiftAssignment(id=entry_id)
+            session.add(entry)
+
+        entry.date = date
+        entry.employee_id = r.get("EMPLOYEEID", 0) or 0
+        entry.shift_id = r.get("SHIFTID", 0) or 0
+        entry.workplace_id = r.get("WORKPLACID", 0) or 0
+        entry.entry_type = r.get("TYPE", 0) or 0
+        count += 1
+
+    if skipped:
+        _log.warning("sync_shift_assignments: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_special_shifts(session: Session, daten_path: str) -> int:
+    """Sync special / one-off shifts from 5SPSHI.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "SPSHI")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        entry_id = r.get("ID")
+        if not entry_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        sp = session.get(SpecialShift, entry_id)
+        if sp is None:
+            sp = SpecialShift(id=entry_id)
+            session.add(sp)
+
+        sp.date = date
+        sp.employee_id = r.get("EMPLOYEEID", 0) or 0
+        sp.name = str(r.get("NAME") or "").strip()
+        sp.shortname = str(r.get("SHORTNAME") or "").strip()
+        sp.shift_id = r.get("SHIFTID", 0) or 0
+        sp.workplace_id = r.get("WORKPLACID", 0) or 0
+        sp.entry_type = r.get("TYPE", 0) or 0
+        sp.colortext = r.get("COLORTEXT", 0) or 0
+        sp.colorbar = r.get("COLORBAR", 0) or 0
+        sp.colorbk = r.get("COLORBK", 16777215) or 16777215
+        sp.bold = r.get("BOLD", 0) or 0
+        sp.startend = str(r.get("STARTEND") or "").strip()
+        sp.duration = float(r.get("DURATION", 0) or 0)
+        sp.noextra = r.get("NOEXTRA", 0) or 0
+        count += 1
+
+    if skipped:
+        _log.warning("sync_special_shifts: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_absences(session: Session, daten_path: str) -> int:
+    """Sync absences from 5ABSEN.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "ABSEN")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        entry_id = r.get("ID")
+        if not entry_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        ab = session.get(Absence, entry_id)
+        if ab is None:
+            ab = Absence(id=entry_id)
+            session.add(ab)
+
+        ab.date = date
+        ab.employee_id = r.get("EMPLOYEEID", 0) or 0
+        # DBF uses LEAVETYPID; tolerate the LEAVETYPEID spelling too.
+        ab.leave_type_id = r.get("LEAVETYPID") or r.get("LEAVETYPEID") or 0
+        ab.entry_type = r.get("TYPE", 0) or 0
+        ab.interval = r.get("INTERVAL", 0) or 0
+        ab.start = r.get("START", 0) or 0
+        ab.end = r.get("END", 0) or 0
+        count += 1
+
+    if skipped:
+        _log.warning("sync_absences: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
 def sync_all(engine, daten_path: str) -> dict[str, int]:
     """Sync all supported tables from DBF into the ORM database.
 
@@ -250,6 +414,9 @@ def sync_all(engine, daten_path: str) -> dict[str, int]:
         stats["shifts"] = sync_shifts(session, daten_path)
         stats["leave_types"] = sync_leave_types(session, daten_path)
         stats["workplaces"] = sync_workplaces(session, daten_path)
+        stats["shift_assignments"] = sync_shift_assignments(session, daten_path)
+        stats["special_shifts"] = sync_special_shifts(session, daten_path)
+        stats["absences"] = sync_absences(session, daten_path)
         session.commit()
         _log.info("ORM sync complete: %s", stats)
         return stats

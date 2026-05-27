@@ -19,21 +19,30 @@ Usage:
 
 from .base import Base, get_engine, get_session, init_db
 from .models import (
+    Absence,
     Company,
     Employee,
     Group,
     GroupAssignment,
     LeaveType,
     Shift,
+    ShiftAssignment,
+    SpecialShift,
     Workplace,
 )
 from .repository import (
+    AbsenceRepository,
     EmployeeRepository,
     GroupRepository,
     LeaveTypeRepository,
+    ShiftAssignmentRepository,
     ShiftRepository,
+    SpecialShiftRepository,
     WorkplaceRepository,
 )
+
+# Legacy alias for the MASHI master-schedule model (now ShiftAssignment).
+ScheduleEntry = ShiftAssignment
 
 __all__ = [
     # Engine / session / schema
@@ -41,7 +50,7 @@ __all__ = [
     "get_engine",
     "get_session",
     "init_db",
-    # Models
+    # Master-data models
     "Company",
     "Employee",
     "Group",
@@ -49,10 +58,18 @@ __all__ = [
     "Shift",
     "LeaveType",
     "Workplace",
+    # Schedule (Phase 3) models
+    "ShiftAssignment",
+    "ScheduleEntry",
+    "SpecialShift",
+    "Absence",
     # Repositories
     "EmployeeRepository",
     "GroupRepository",
     "ShiftRepository",
     "LeaveTypeRepository",
     "WorkplaceRepository",
+    "ShiftAssignmentRepository",
+    "SpecialShiftRepository",
+    "AbsenceRepository",
 ]

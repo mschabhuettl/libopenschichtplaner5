@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-27
+
+ORM Phase 3 — the time-based roster. Adds the schedule-entry tables to the
+SQLAlchemy layer plus a sync robustness fix. Additive and backward compatible.
+
+### Added
+
+- **`ShiftAssignment`** (`schedule_entries`, from `5MASHI.DBF`),
+  **`SpecialShift`** (`special_shifts`, `5SPSHI.DBF`) and **`Absence`**
+  (`absences`, `5ABSEN.DBF`) ORM models, importable from `sp5lib.orm`, each with
+  a `to_dict()` mirroring the DBF keys (`DATE` / `EMPLOYEEID` / `SHIFTID` /
+  `LEAVETYPID` / …). `init_db()` creates the tables.
+- **`ShiftAssignmentRepository`**, **`SpecialShiftRepository`**,
+  **`AbsenceRepository`** with `list(date_from=None, date_to=None,
+  employee_id=None)` (date-window + per-employee filtering) and `get(id)`.
+- DBF → ORM upsert `sync.sync_shift_assignments`, `sync.sync_special_shifts`,
+  `sync.sync_absences`, wired into `sync.sync_all()`. Blank/invalid `DATE`
+  values are skipped and logged; references (employee/shift/leave-type) are
+  plain indexed integers with no DB-level FK, so dirty legacy data syncs.
+
+### Fixed
+
+- `sync.sync_groups` no longer aborts `sync_all` with
+  `FOREIGN KEY constraint failed` when `5GROUP.DBF` contains a `super_id` that
+  points to a non-existent group. Dangling parent references are now resolved
+  in a second pass: unknown references are set to `NULL` and logged. This also
+  makes group ordering in the DBF irrelevant.
+
+### Changed
+
+- `ShiftAssignment`, `SpecialShift` and `Absence` are defined canonically in
+  `sp5lib.orm.models` and re-exported from `sp5lib.orm.models_pg`. The former
+  `ScheduleEntry` name (MASHI) remains importable as an alias of
+  `ShiftAssignment`, so existing
+  `from sp5lib.orm.models_pg import ScheduleEntry, SpecialShift, Absence`
+  imports (used by `pg_database`) keep working unchanged.
+
 ## [1.2.0] - 2026-05-27
 
 ORM Phase 2 — adds the next three core entities to the SQLAlchemy layer
