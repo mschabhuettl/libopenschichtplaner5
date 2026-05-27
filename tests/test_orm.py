@@ -15,9 +15,15 @@ import pytest
 from sp5lib.orm import (
     Absence,
     AbsenceRepository,
+    Employee,
     Group,
+    GroupAssignment,
+    Holiday,
+    HolidayRepository,
     LeaveType,
     LeaveTypeRepository,
+    Period,
+    PeriodRepository,
     ScheduleEntry,
     Shift,
     ShiftAssignment,
@@ -399,3 +405,150 @@ def test_sync_all_includes_phase3_tables(engine, monkeypatch):
     assert stats["shift_assignments"] == 1
     assert stats["special_shifts"] == 1
     assert stats["absences"] == 1
+
+
+# ─── Phase 4: holiday / period models + repositories ────────────────────────────
+
+
+def test_init_db_creates_phase4_tables(engine):
+    from sqlalchemy import inspect
+
+    tables = set(inspect(engine).get_table_names())
+    assert {"holidays", "periods"} <= tables
+
+
+def test_holiday_reexported_from_models_pg():
+    from sp5lib.orm import models, models_pg
+
+    assert models.Holiday is models_pg.Holiday
+    assert models.Period is models_pg.Period
+
+
+def test_holiday_repository_year_filter(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                Holiday(id=1, date="2025-12-25", name="Weihnachten 2025"),
+                Holiday(id=2, date="2026-01-01", name="Neujahr 2026"),
+                Holiday(id=3, date="2026-05-01", name="Tag der Arbeit", interval=1),
+            ]
+        )
+        session.flush()
+        repo = HolidayRepository(session)
+        assert [h.id for h in repo.list()] == [1, 2, 3]
+        # year 2026: the two 2026 entries, plus the recurring one (id 3 already 2026)
+        ids_2026 = {h.id for h in repo.list(year=2026)}
+        assert ids_2026 == {2, 3}
+        # recurring holiday shows up even when querying a different year
+        assert 3 in {h.id for h in repo.list(year=2030)}
+        assert repo.get(1).name == "Weihnachten 2025"
+
+
+def test_period_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                Period(id=1, group_id=1, start="2026-01-01", end="2026-03-31", description="Q1"),
+                Period(id=2, group_id=1, start="2026-04-01", end="2026-06-30", description="Q2"),
+                Period(id=3, group_id=2, start="2026-01-01", end="2026-12-31", description="Jahr"),
+            ]
+        )
+        session.flush()
+        repo = PeriodRepository(session)
+        assert [p.id for p in repo.list()] == [1, 3, 2]  # ordered by start, then id
+        assert [p.id for p in repo.list(group_id=1)] == [1, 2]
+        assert [p.id for p in repo.list(date_from="2026-04-01")] == [2]
+        assert repo.get(3).description == "Jahr"
+
+
+def test_holiday_and_period_to_dict_mirror_dbf_keys():
+    assert Holiday(id=1, date="2026-01-01", name="Neujahr", interval=1).to_dict() == {
+        "ID": 1, "DATE": "2026-01-01", "NAME": "Neujahr", "INTERVAL": 1,
+    }
+    d = Period(id=1, group_id=2, start="2026-01-01", end="2026-12-31",
+               color=255, description="Jahr").to_dict()
+    assert d == {
+        "ID": 1, "GROUPID": 2, "START": "2026-01-01", "END": "2026-12-31",
+        "COLOR": 255, "DESCRIPT": "Jahr",
+    }
+
+
+# ─── Phase 4 sync ───────────────────────────────────────────────────────────────
+
+
+def test_sync_holidays_and_periods(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "HOLID": [
+                {"ID": 1, "DATE": "2026-01-01", "NAME": "Neujahr", "INTERVAL": 1},
+                {"ID": 2, "DATE": "", "NAME": "kaputt"},  # invalid date -> skipped
+            ],
+            "PERIO": [
+                {"ID": 1, "GROUPID": 1, "START": "2026-01-01", "END": "2026-03-31",
+                 "COLOR": 255, "DESCRIPT": "Q1"},
+            ],
+        },
+    )
+    with session_scope(engine) as session:
+        assert sync.sync_holidays(session, "/x") == 1
+        assert sync.sync_periods(session, "/x") == 1
+        assert HolidayRepository(session).get(1).interval == 1
+        # DESCRIPT (not NAME) carries the period label
+        assert PeriodRepository(session).get(1).description == "Q1"
+
+
+# ─── Teil A: sync_group_assignments UNIQUE / dedup / dangling fix ────────────────
+
+
+def test_sync_group_assignments_non_unique_dbf_ids(engine, monkeypatch):
+    # Regression for the v1.3.0 defect: 5GRASG.DBF IDs are not unique (per-group
+    # running index). The sync must not use them as PK (no UNIQUE/IntegrityError),
+    # must de-duplicate (employee, group) pairs, and must skip dangling refs.
+    from sqlalchemy import select
+
+    from sp5lib.orm import sync
+
+    with session_scope(engine) as session:
+        session.add_all([Employee(id=i, name=f"E{i}") for i in (40, 41, 42, 43, 44)])
+        session.add_all([Group(id=i, name=f"G{i}") for i in (51, 54, 2, 55)])
+        session.flush()
+
+    _patch_dbf(
+        monkeypatch,
+        {"GRASG": [
+            {"ID": 1, "EMPLOYEEID": 40, "GROUPID": 51},
+            {"ID": 2, "EMPLOYEEID": 41, "GROUPID": 54},
+            {"ID": 2, "EMPLOYEEID": 42, "GROUPID": 54},   # repeated DBF ID, distinct pair
+            {"ID": 1, "EMPLOYEEID": 44, "GROUPID": 2},    # repeated DBF ID, distinct pair
+            {"ID": 3, "EMPLOYEEID": 43, "GROUPID": 55},
+            {"ID": 9, "EMPLOYEEID": 40, "GROUPID": 51},   # duplicate pair -> deduped
+            {"ID": 10, "EMPLOYEEID": 999, "GROUPID": 51},  # dangling employee -> skipped
+        ]},
+    )
+    with session_scope(engine) as session:
+        # must not raise IntegrityError; returns the count of unique valid pairs
+        assert sync.sync_group_assignments(session, "/x") == 5
+        rows = list(session.scalars(select(GroupAssignment)).all())
+        pairs = {(r.employee_id, r.group_id) for r in rows}
+        assert pairs == {(40, 51), (41, 54), (42, 54), (44, 2), (43, 55)}
+        # PKs are autoincrement (not the non-unique DBF IDs)
+        assert len({r.id for r in rows}) == 5
+
+
+def test_sync_all_includes_phase4_tables(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "HOLID": [{"ID": 1, "DATE": "2026-01-01", "NAME": "Neujahr"}],
+            "PERIO": [{"ID": 1, "GROUPID": 1, "START": "2026-01-01", "END": "2026-12-31",
+                       "DESCRIPT": "Jahr"}],
+        },
+    )
+    stats = sync.sync_all(engine, "/x")
+    assert stats["holidays"] == 1
+    assert stats["periods"] == 1
