@@ -13,7 +13,7 @@ writes raw SQL, so a database migration is a config change, not a rewrite.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Employee, Group, GroupAssignment
+from .models import Employee, Group, GroupAssignment, LeaveType, Shift, Workplace
 
 
 class EmployeeRepository:
@@ -183,3 +183,57 @@ class GroupRepository:
             .order_by(Group.position)
         )
         return list(self.session.scalars(stmt).all())
+
+
+class ShiftRepository:
+    """Data access for Shift definitions (5SHIFT.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(self, include_hidden: bool = False) -> list[Shift]:
+        """Return all shifts, ordered by position."""
+        stmt = select(Shift).order_by(Shift.position)
+        if not include_hidden:
+            stmt = stmt.where(Shift.hide == False)  # noqa: E712
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, shift_id: int) -> Shift | None:
+        """Return a single shift by ID, or None."""
+        return self.session.get(Shift, shift_id)
+
+
+class LeaveTypeRepository:
+    """Data access for LeaveType definitions (5LEAVT.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(self, include_hidden: bool = False) -> list[LeaveType]:
+        """Return all leave types, ordered by position."""
+        stmt = select(LeaveType).order_by(LeaveType.position)
+        if not include_hidden:
+            stmt = stmt.where(LeaveType.hide == False)  # noqa: E712
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, leave_type_id: int) -> LeaveType | None:
+        """Return a single leave type by ID, or None."""
+        return self.session.get(LeaveType, leave_type_id)
+
+
+class WorkplaceRepository:
+    """Data access for Workplace definitions (5WOPL.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(self, include_hidden: bool = False) -> list[Workplace]:
+        """Return all workplaces, ordered by position."""
+        stmt = select(Workplace).order_by(Workplace.position)
+        if not include_hidden:
+            stmt = stmt.where(Workplace.hide == False)  # noqa: E712
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, workplace_id: int) -> Workplace | None:
+        """Return a single workplace by ID, or None."""
+        return self.session.get(Workplace, workplace_id)

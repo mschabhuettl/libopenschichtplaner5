@@ -18,5 +18,41 @@ Usage:
 """
 
 from .base import Base, get_engine, get_session, init_db
+from .models import (
+    Company,
+    Employee,
+    Group,
+    GroupAssignment,
+    LeaveType,
+    Shift,
+    Workplace,
+)
+from .repository import (
+    EmployeeRepository,
+    GroupRepository,
+    LeaveTypeRepository,
+    ShiftRepository,
+    WorkplaceRepository,
+)
 
-__all__ = ["Base", "get_engine", "get_session", "init_db"]
+__all__ = [
+    # Engine / session / schema
+    "Base",
+    "get_engine",
+    "get_session",
+    "init_db",
+    # Models
+    "Company",
+    "Employee",
+    "Group",
+    "GroupAssignment",
+    "Shift",
+    "LeaveType",
+    "Workplace",
+    # Repositories
+    "EmployeeRepository",
+    "GroupRepository",
+    "ShiftRepository",
+    "LeaveTypeRepository",
+    "WorkplaceRepository",
+]

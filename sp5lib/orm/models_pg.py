@@ -19,81 +19,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
 
-
-class Shift(Base):
-    __tablename__ = "shifts"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    shortname: Mapped[str | None] = mapped_column(String(20), default="")
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    hide: Mapped[bool] = mapped_column(Boolean, default=False)
-    colortext: Mapped[int] = mapped_column(Integer, default=0)
-    colorbar: Mapped[int] = mapped_column(Integer, default=0)
-    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
-    duration0: Mapped[float] = mapped_column(Float, default=0.0)
-    duration1: Mapped[float] = mapped_column(Float, default=0.0)
-    duration2: Mapped[float] = mapped_column(Float, default=0.0)
-    duration3: Mapped[float] = mapped_column(Float, default=0.0)
-    duration4: Mapped[float] = mapped_column(Float, default=0.0)
-    duration5: Mapped[float] = mapped_column(Float, default=0.0)
-    duration6: Mapped[float] = mapped_column(Float, default=0.0)
-    duration7: Mapped[float] = mapped_column(Float, default=0.0)
-    startend0: Mapped[str | None] = mapped_column(String(50), default="")
-    startend1: Mapped[str | None] = mapped_column(String(50), default="")
-    startend2: Mapped[str | None] = mapped_column(String(50), default="")
-    startend3: Mapped[str | None] = mapped_column(String(50), default="")
-    startend4: Mapped[str | None] = mapped_column(String(50), default="")
-    startend5: Mapped[str | None] = mapped_column(String(50), default="")
-    startend6: Mapped[str | None] = mapped_column(String(50), default="")
-    startend7: Mapped[str | None] = mapped_column(String(50), default="")
-
-    def to_dict(self) -> dict:
-        d = {"ID": self.id, "NAME": self.name, "SHORTNAME": self.shortname or "",
-             "POSITION": self.position, "HIDE": self.hide,
-             "COLORTEXT": self.colortext, "COLORBAR": self.colorbar, "COLORBK": self.colorbk}
-        for i in range(8):
-            d[f"DURATION{i}"] = getattr(self, f"duration{i}")
-            d[f"STARTEND{i}"] = getattr(self, f"startend{i}") or ""
-        return d
-
-
-class LeaveType(Base):
-    __tablename__ = "leave_types"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    shortname: Mapped[str | None] = mapped_column(String(20), default="")
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    hide: Mapped[bool] = mapped_column(Boolean, default=False)
-    entitled: Mapped[bool] = mapped_column(Boolean, default=False)
-    stdentit: Mapped[float] = mapped_column(Float, default=0.0)
-    chargetyp: Mapped[int] = mapped_column(Integer, default=0)
-    colortext: Mapped[int] = mapped_column(Integer, default=0)
-    colorbar: Mapped[int] = mapped_column(Integer, default=0)
-    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
-
-    def to_dict(self) -> dict:
-        return {"ID": self.id, "NAME": self.name, "SHORTNAME": self.shortname or "",
-                "POSITION": self.position, "HIDE": self.hide,
-                "ENTITLED": self.entitled, "STDENTIT": self.stdentit,
-                "CHARGETYP": self.chargetyp,
-                "COLORTEXT": self.colortext, "COLORBAR": self.colorbar, "COLORBK": self.colorbk}
-
-
-class Workplace(Base):
-    __tablename__ = "workplaces"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    shortname: Mapped[str | None] = mapped_column(String(20), default="")
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    hide: Mapped[bool] = mapped_column(Boolean, default=False)
-    colortext: Mapped[int] = mapped_column(Integer, default=0)
-    colorbar: Mapped[int] = mapped_column(Integer, default=0)
-    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
-
-    def to_dict(self) -> dict:
-        return {"ID": self.id, "NAME": self.name, "SHORTNAME": self.shortname or "",
-                "POSITION": self.position, "HIDE": self.hide,
-                "COLORTEXT": self.colortext, "COLORBAR": self.colorbar, "COLORBK": self.colorbk}
+# Shift / LeaveType / Workplace are defined canonically in models.py (single
+# source of truth for the SQLite + Postgres schema) and re-exported here so
+# existing `from sp5lib.orm.models_pg import Shift, LeaveType, Workplace`
+# imports keep working unchanged.
+from .models import LeaveType, Shift, Workplace  # noqa: F401,E402
 
 
 class Holiday(Base):

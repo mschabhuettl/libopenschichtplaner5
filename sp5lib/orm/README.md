@@ -34,8 +34,8 @@ layer and serves as a foundation for a future database migration (SQLite → Pos
 sp5lib/orm/
 ├── __init__.py       # Public API: get_engine, get_session, init_db
 ├── base.py           # Engine factory, session management, Base class
-├── models.py         # ORM models: Employee, Group, GroupAssignment
-├── repository.py     # Repository pattern: EmployeeRepository, GroupRepository
+├── models.py         # ORM models: Employee, Group, GroupAssignment, Shift, LeaveType, Workplace
+├── repository.py     # Repositories: Employee, Group, Shift, LeaveType, Workplace
 ├── sync.py           # DBF → ORM sync utilities
 └── README.md         # This file
 ```
@@ -83,8 +83,8 @@ This initial implementation covers:
 
 ## Migration Roadmap
 
-1. ✅ **Phase 1** (this PR): ORM models + repositories for Employees & Groups
-2. **Phase 2**: Add models for Shifts, LeaveTypes, Workplaces
+1. ✅ **Phase 1**: ORM models + repositories for Employees & Groups
+2. ✅ **Phase 2**: ORM models + repositories + DBF sync for Shifts, LeaveTypes, Workplaces
 3. **Phase 3**: Add models for Schedule entries (MASHI, SPSHI, ABSEN)
 4. **Phase 4**: Wire ORM repositories into FastAPI routers (dual-read)
 5. **Phase 5**: Switch write path to ORM, keep DBF sync for legacy

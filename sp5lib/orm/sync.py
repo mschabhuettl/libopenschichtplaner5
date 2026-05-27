@@ -20,7 +20,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .base import get_session
-from .models import Employee, Group, GroupAssignment
+from .models import (
+    Employee,
+    Group,
+    GroupAssignment,
+    LeaveType,
+    Shift,
+    Workplace,
+)
 
 _log = logging.getLogger("sp5api.orm.sync")
 
@@ -139,6 +146,96 @@ def sync_group_assignments(session: Session, daten_path: str) -> int:
     return count
 
 
+def sync_shifts(session: Session, daten_path: str) -> int:
+    """Sync shift definitions from 5SHIFT.DBF into the ORM shifts table."""
+    rows = _read_dbf(daten_path, "SHIFT")
+    count = 0
+
+    for r in rows:
+        shift_id = r.get("ID")
+        if not shift_id:
+            continue
+
+        shift = session.get(Shift, shift_id)
+        if shift is None:
+            shift = Shift(id=shift_id)
+            session.add(shift)
+
+        shift.name = str(r.get("NAME") or "").strip()
+        shift.shortname = str(r.get("SHORTNAME") or "").strip()
+        shift.position = r.get("POSITION", 0) or 0
+        shift.hide = bool(r.get("HIDE"))
+        shift.colortext = r.get("COLORTEXT", 0) or 0
+        shift.colorbar = r.get("COLORBAR", 0) or 0
+        shift.colorbk = r.get("COLORBK", 16777215) or 16777215
+        for i in range(8):
+            setattr(shift, f"duration{i}", float(r.get(f"DURATION{i}", 0) or 0))
+            setattr(shift, f"startend{i}", str(r.get(f"STARTEND{i}") or "").strip())
+        count += 1
+
+    session.flush()
+    return count
+
+
+def sync_leave_types(session: Session, daten_path: str) -> int:
+    """Sync leave/absence types from 5LEAVT.DBF into the ORM leave_types table."""
+    rows = _read_dbf(daten_path, "LEAVT")
+    count = 0
+
+    for r in rows:
+        lt_id = r.get("ID")
+        if not lt_id:
+            continue
+
+        lt = session.get(LeaveType, lt_id)
+        if lt is None:
+            lt = LeaveType(id=lt_id)
+            session.add(lt)
+
+        lt.name = str(r.get("NAME") or "").strip()
+        lt.shortname = str(r.get("SHORTNAME") or "").strip()
+        lt.position = r.get("POSITION", 0) or 0
+        lt.hide = bool(r.get("HIDE"))
+        lt.entitled = bool(r.get("ENTITLED"))
+        lt.stdentit = float(r.get("STDENTIT", 0) or 0)
+        lt.chargetyp = r.get("CHARGETYP", 0) or 0
+        lt.colortext = r.get("COLORTEXT", 0) or 0
+        lt.colorbar = r.get("COLORBAR", 0) or 0
+        lt.colorbk = r.get("COLORBK", 16777215) or 16777215
+        count += 1
+
+    session.flush()
+    return count
+
+
+def sync_workplaces(session: Session, daten_path: str) -> int:
+    """Sync workplace definitions from 5WOPL.DBF into the ORM workplaces table."""
+    rows = _read_dbf(daten_path, "WOPL")
+    count = 0
+
+    for r in rows:
+        wp_id = r.get("ID")
+        if not wp_id:
+            continue
+
+        wp = session.get(Workplace, wp_id)
+        if wp is None:
+            wp = Workplace(id=wp_id)
+            session.add(wp)
+
+        wp.name = str(r.get("NAME") or "").strip()
+        wp.shortname = str(r.get("SHORTNAME") or "").strip()
+        wp.position = r.get("POSITION", 0) or 0
+        wp.hide = bool(r.get("HIDE"))
+        wp.colortext = r.get("COLORTEXT", 0) or 0
+        wp.colorbar = r.get("COLORBAR", 0) or 0
+        wp.colorbk = r.get("COLORBK", 16777215) or 16777215
+        count += 1
+
+    session.flush()
+    return count
+
+
 def sync_all(engine, daten_path: str) -> dict[str, int]:
     """Sync all supported tables from DBF into the ORM database.
 
@@ -150,6 +247,9 @@ def sync_all(engine, daten_path: str) -> dict[str, int]:
         stats["employees"] = sync_employees(session, daten_path)
         stats["groups"] = sync_groups(session, daten_path)
         stats["group_assignments"] = sync_group_assignments(session, daten_path)
+        stats["shifts"] = sync_shifts(session, daten_path)
+        stats["leave_types"] = sync_leave_types(session, daten_path)
+        stats["workplaces"] = sync_workplaces(session, daten_path)
         session.commit()
         _log.info("ORM sync complete: %s", stats)
         return stats
