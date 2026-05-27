@@ -384,3 +384,126 @@ class Workplace(Base):
             "COLORBAR": self.colorbar,
             "COLORBK": self.colorbk,
         }
+
+
+# ── Phase 3: time-based schedule entries ─────────────────────────────────────
+# The actual roster (not just the master-data definitions). Foreign keys to
+# employees / shifts / leave types are modelled as plain indexed Integer
+# columns *without* DB-level FK constraints, so dirty legacy data (dangling
+# references) syncs without breaking. Defined canonically here and re-exported
+# from models_pg.py (ShiftAssignment is also aliased there as ScheduleEntry).
+
+
+class ShiftAssignment(Base):
+    """Regular shift assignment (Dienstplan-Eintrag) — maps to 5MASHI.DBF."""
+
+    __tablename__ = "schedule_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    shift_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
+    entry_type: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_schedule_emp_date", "employee_id", "date"),
+        Index("idx_schedule_date", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ShiftAssignment(id={self.id}, emp={self.employee_id}, date='{self.date}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "DATE": self.date,
+            "EMPLOYEEID": self.employee_id,
+            "SHIFTID": self.shift_id,
+            "WORKPLACID": self.workplace_id,
+            "TYPE": self.entry_type,
+        }
+
+
+class SpecialShift(Base):
+    """Special / one-off shift (Sonderschicht) — maps to 5SPSHI.DBF."""
+
+    __tablename__ = "special_shifts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    name: Mapped[str | None] = mapped_column(String(100), default="")
+    shortname: Mapped[str | None] = mapped_column(String(20), default="")
+    shift_id: Mapped[int] = mapped_column(Integer, default=0)
+    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
+    entry_type: Mapped[int] = mapped_column(Integer, default=0)
+    colortext: Mapped[int] = mapped_column(Integer, default=0)
+    colorbar: Mapped[int] = mapped_column(Integer, default=0)
+    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
+    bold: Mapped[int] = mapped_column(Integer, default=0)
+    startend: Mapped[str | None] = mapped_column(String(50), default="")
+    duration: Mapped[float] = mapped_column(Float, default=0.0)
+    noextra: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_spshi_emp_date", "employee_id", "date"),
+        Index("idx_spshi_date", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SpecialShift(id={self.id}, emp={self.employee_id}, date='{self.date}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "DATE": self.date,
+            "EMPLOYEEID": self.employee_id,
+            "SHIFTID": self.shift_id,
+            "WORKPLACID": self.workplace_id,
+            "TYPE": self.entry_type,
+            "NAME": self.name or "",
+            "SHORTNAME": self.shortname or "",
+            "COLORTEXT": self.colortext,
+            "COLORBAR": self.colorbar,
+            "COLORBK": self.colorbk,
+            "BOLD": self.bold,
+            "STARTEND": self.startend or "",
+            "DURATION": self.duration,
+            "NOEXTRA": self.noextra,
+        }
+
+
+class Absence(Base):
+    """Absence / leave entry (Abwesenheit) — maps to 5ABSEN.DBF."""
+
+    __tablename__ = "absences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    leave_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    entry_type: Mapped[int] = mapped_column(Integer, default=0)
+    interval: Mapped[int] = mapped_column(Integer, default=0)
+    start: Mapped[int] = mapped_column(Integer, default=0)
+    end: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (
+        Index("idx_absence_emp_date", "employee_id", "date"),
+        Index("idx_absence_date", "date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Absence(id={self.id}, emp={self.employee_id}, date='{self.date}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "DATE": self.date,
+            "EMPLOYEEID": self.employee_id,
+            "LEAVETYPID": self.leave_type_id,
+            "TYPE": self.entry_type,
+            "INTERVAL": self.interval,
+            "START": self.start,
+            "END": self.end,
+        }

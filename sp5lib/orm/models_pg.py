@@ -9,7 +9,6 @@ models already defined in models.py.
 from sqlalchemy import (
     Boolean,
     Float,
-    Index,
     Integer,
     LargeBinary,
     String,
@@ -19,11 +18,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
 
-# Shift / LeaveType / Workplace are defined canonically in models.py (single
-# source of truth for the SQLite + Postgres schema) and re-exported here so
-# existing `from sp5lib.orm.models_pg import Shift, LeaveType, Workplace`
-# imports keep working unchanged.
-from .models import LeaveType, Shift, Workplace  # noqa: F401,E402
+# Master-data (Phase 2) and schedule (Phase 3) entities are defined canonically
+# in models.py (single source of truth for the SQLite + Postgres schema) and
+# re-exported here so existing `from sp5lib.orm.models_pg import …` imports keep
+# working unchanged. ScheduleEntry is the legacy name for ShiftAssignment.
+from .models import (  # noqa: F401,E402
+    Absence,
+    LeaveType,
+    Shift,
+    ShiftAssignment,
+    SpecialShift,
+    Workplace,
+)
+
+# Backward-compatible alias: the MASHI master-schedule model was previously
+# called ScheduleEntry. It is now ShiftAssignment (same table "schedule_entries",
+# same columns); keep the old name importable for existing consumers.
+ScheduleEntry = ShiftAssignment
 
 
 class Holiday(Base):
@@ -35,50 +46,6 @@ class Holiday(Base):
 
     def to_dict(self) -> dict:
         return {"ID": self.id, "DATE": self.date, "NAME": self.name, "INTERVAL": self.interval}
-
-
-class ScheduleEntry(Base):
-    __tablename__ = "schedule_entries"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    shift_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
-    entry_type: Mapped[int] = mapped_column(Integer, default=0)
-    __table_args__ = (Index("idx_schedule_emp_date", "employee_id", "date"), Index("idx_schedule_date", "date"))
-
-
-class SpecialShift(Base):
-    __tablename__ = "special_shifts"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    name: Mapped[str | None] = mapped_column(String(100), default="")
-    shortname: Mapped[str | None] = mapped_column(String(20), default="")
-    shift_id: Mapped[int] = mapped_column(Integer, default=0)
-    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
-    entry_type: Mapped[int] = mapped_column(Integer, default=0)
-    colortext: Mapped[int] = mapped_column(Integer, default=0)
-    colorbar: Mapped[int] = mapped_column(Integer, default=0)
-    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
-    bold: Mapped[int] = mapped_column(Integer, default=0)
-    startend: Mapped[str | None] = mapped_column(String(50), default="")
-    duration: Mapped[float] = mapped_column(Float, default=0.0)
-    noextra: Mapped[int] = mapped_column(Integer, default=0)
-    __table_args__ = (Index("idx_spshi_emp_date", "employee_id", "date"), Index("idx_spshi_date", "date"))
-
-
-class Absence(Base):
-    __tablename__ = "absences"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    leave_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    entry_type: Mapped[int] = mapped_column(Integer, default=0)
-    interval: Mapped[int] = mapped_column(Integer, default=0)
-    start: Mapped[int] = mapped_column(Integer, default=0)
-    end: Mapped[int] = mapped_column(Integer, default=0)
-    __table_args__ = (Index("idx_absence_emp_date", "employee_id", "date"), Index("idx_absence_date", "date"))
 
 
 class User(Base):

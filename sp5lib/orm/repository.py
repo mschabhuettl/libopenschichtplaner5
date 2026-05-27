@@ -13,7 +13,17 @@ writes raw SQL, so a database migration is a config change, not a rewrite.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Employee, Group, GroupAssignment, LeaveType, Shift, Workplace
+from .models import (
+    Absence,
+    Employee,
+    Group,
+    GroupAssignment,
+    LeaveType,
+    Shift,
+    ShiftAssignment,
+    SpecialShift,
+    Workplace,
+)
 
 
 class EmployeeRepository:
@@ -237,3 +247,87 @@ class WorkplaceRepository:
     def get(self, workplace_id: int) -> Workplace | None:
         """Return a single workplace by ID, or None."""
         return self.session.get(Workplace, workplace_id)
+
+
+class ShiftAssignmentRepository:
+    """Data access for regular schedule entries (5MASHI.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        employee_id: int | None = None,
+    ) -> list[ShiftAssignment]:
+        """Return schedule entries filtered by ISO date range and/or employee."""
+        stmt = select(ShiftAssignment)
+        if date_from is not None:
+            stmt = stmt.where(ShiftAssignment.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(ShiftAssignment.date <= date_to)
+        if employee_id is not None:
+            stmt = stmt.where(ShiftAssignment.employee_id == employee_id)
+        stmt = stmt.order_by(ShiftAssignment.date, ShiftAssignment.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, entry_id: int) -> ShiftAssignment | None:
+        """Return a single schedule entry by ID, or None."""
+        return self.session.get(ShiftAssignment, entry_id)
+
+
+class SpecialShiftRepository:
+    """Data access for special / one-off shifts (5SPSHI.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        employee_id: int | None = None,
+    ) -> list[SpecialShift]:
+        """Return special shifts filtered by ISO date range and/or employee."""
+        stmt = select(SpecialShift)
+        if date_from is not None:
+            stmt = stmt.where(SpecialShift.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(SpecialShift.date <= date_to)
+        if employee_id is not None:
+            stmt = stmt.where(SpecialShift.employee_id == employee_id)
+        stmt = stmt.order_by(SpecialShift.date, SpecialShift.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, entry_id: int) -> SpecialShift | None:
+        """Return a single special shift by ID, or None."""
+        return self.session.get(SpecialShift, entry_id)
+
+
+class AbsenceRepository:
+    """Data access for absences / leave entries (5ABSEN.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        employee_id: int | None = None,
+    ) -> list[Absence]:
+        """Return absences filtered by ISO date range and/or employee."""
+        stmt = select(Absence)
+        if date_from is not None:
+            stmt = stmt.where(Absence.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(Absence.date <= date_to)
+        if employee_id is not None:
+            stmt = stmt.where(Absence.employee_id == employee_id)
+        stmt = stmt.order_by(Absence.date, Absence.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, entry_id: int) -> Absence | None:
+        """Return a single absence by ID, or None."""
+        return self.session.get(Absence, entry_id)
