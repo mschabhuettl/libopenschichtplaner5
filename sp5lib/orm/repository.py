@@ -15,11 +15,14 @@ from sqlalchemy.orm import Session
 
 from .models import (
     Absence,
+    AccountBooking,
     Employee,
     Group,
     GroupAssignment,
     Holiday,
+    LeaveEntitlement,
     LeaveType,
+    OvertimeEntry,
     Period,
     Shift,
     ShiftAssignment,
@@ -390,3 +393,84 @@ class PeriodRepository:
     def get(self, period_id: int) -> Period | None:
         """Return a single period by ID, or None."""
         return self.session.get(Period, period_id)
+
+
+class AccountBookingRepository:
+    """Data access for manual account / time bookings (5BOOK.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        employee_id: int | None = None,
+    ) -> list[AccountBooking]:
+        """Return bookings filtered by ISO date range and/or employee."""
+        stmt = select(AccountBooking)
+        if date_from is not None:
+            stmt = stmt.where(AccountBooking.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(AccountBooking.date <= date_to)
+        if employee_id is not None:
+            stmt = stmt.where(AccountBooking.employee_id == employee_id)
+        stmt = stmt.order_by(AccountBooking.date, AccountBooking.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, booking_id: int) -> AccountBooking | None:
+        """Return a single booking by ID, or None."""
+        return self.session.get(AccountBooking, booking_id)
+
+
+class OvertimeEntryRepository:
+    """Data access for manual overtime adjustments (5OVER.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        employee_id: int | None = None,
+    ) -> list[OvertimeEntry]:
+        """Return overtime entries filtered by ISO date range and/or employee."""
+        stmt = select(OvertimeEntry)
+        if date_from is not None:
+            stmt = stmt.where(OvertimeEntry.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(OvertimeEntry.date <= date_to)
+        if employee_id is not None:
+            stmt = stmt.where(OvertimeEntry.employee_id == employee_id)
+        stmt = stmt.order_by(OvertimeEntry.date, OvertimeEntry.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, entry_id: int) -> OvertimeEntry | None:
+        """Return a single overtime entry by ID, or None."""
+        return self.session.get(OvertimeEntry, entry_id)
+
+
+class LeaveEntitlementRepository:
+    """Data access for annual leave entitlements (5LEAEN.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        year: int | None = None,
+        employee_id: int | None = None,
+    ) -> list[LeaveEntitlement]:
+        """Return leave entitlements filtered by year and/or employee."""
+        stmt = select(LeaveEntitlement)
+        if year is not None:
+            stmt = stmt.where(LeaveEntitlement.year == year)
+        if employee_id is not None:
+            stmt = stmt.where(LeaveEntitlement.employee_id == employee_id)
+        stmt = stmt.order_by(LeaveEntitlement.year, LeaveEntitlement.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, entitlement_id: int) -> LeaveEntitlement | None:
+        """Return a single entitlement by ID, or None."""
+        return self.session.get(LeaveEntitlement, entitlement_id)

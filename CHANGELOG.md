@@ -5,6 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-27
+
+ORM Phase 5 — account bookings, overtime and leave entitlements (the data
+behind the time-account / overtime / leave-balance features). Additive and
+backward compatible.
+
+### Added
+
+- **`AccountBooking`** (`bookings_pg`, from `5BOOK.DBF`), **`OvertimeEntry`**
+  (`overtime_records`, `5OVER.DBF`) and **`LeaveEntitlement`**
+  (`leave_entitlements`, `5LEAEN.DBF`) ORM models, importable from
+  `sp5lib.orm`, with `to_dict()` mirroring the real DBF keys. `init_db()`
+  creates the tables.
+- **`AccountBookingRepository`** and **`OvertimeEntryRepository`** with
+  `list(date_from=None, date_to=None, employee_id=None)` + `get(id)`;
+  **`LeaveEntitlementRepository`** with `list(year=None, employee_id=None)` +
+  `get(id)`.
+- DBF → ORM upsert `sync.sync_book`, `sync.sync_overtime`,
+  `sync.sync_leave_entitlements`, wired into `sync.sync_all()`. `BOOK`/`OVER`
+  rows with a blank/invalid `DATE` are skipped and logged. `sync_all()` now
+  covers 14 tables.
+
+### Changed
+
+- `AccountBooking` / `OvertimeEntry` / `LeaveEntitlement` are defined
+  canonically in `sp5lib.orm.models` and re-exported from
+  `sp5lib.orm.models_pg`. The previous names **`Booking`** (→ `AccountBooking`)
+  and **`OvertimeRecord`** (→ `OvertimeEntry`) remain importable as aliases
+  (same tables `bookings_pg` / `overtime_records`), so existing imports keep
+  working.
+
+### Notes
+
+- `LeaveEntitlement` maps the DBF fields `ENTITLEMNT` → `entitlement`,
+  `REST` → `carry_forward`, `INDAYS` → `in_days`; `to_dict()` mirrors the DBF
+  spellings (`ENTITLEMNT` / `REST` / `INDAYS`).
+
 ## [1.4.0] - 2026-05-27
 
 ORM Phase 4 — reference tables (holidays, accounting periods) plus a sync

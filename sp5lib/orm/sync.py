@@ -23,11 +23,14 @@ from sqlalchemy.orm import Session
 from .base import get_session
 from .models import (
     Absence,
+    AccountBooking,
     Employee,
     Group,
     GroupAssignment,
     Holiday,
+    LeaveEntitlement,
     LeaveType,
+    OvertimeEntry,
     Period,
     Shift,
     ShiftAssignment,
@@ -488,6 +491,101 @@ def sync_periods(session: Session, daten_path: str) -> int:
     return count
 
 
+def sync_book(session: Session, daten_path: str) -> int:
+    """Sync manual account/time bookings from 5BOOK.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "BOOK")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        book_id = r.get("ID")
+        if not book_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        bk = session.get(AccountBooking, book_id)
+        if bk is None:
+            bk = AccountBooking(id=book_id)
+            session.add(bk)
+
+        bk.employee_id = r.get("EMPLOYEEID", 0) or 0
+        bk.date = date
+        bk.booking_type = r.get("TYPE", 0) or 0
+        bk.value = float(r.get("VALUE", 0) or 0)
+        bk.note = str(r.get("NOTE") or "").strip()
+        count += 1
+
+    if skipped:
+        _log.warning("sync_book: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_overtime(session: Session, daten_path: str) -> int:
+    """Sync manual overtime adjustments from 5OVER.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "OVER")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        ot_id = r.get("ID")
+        if not ot_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        ot = session.get(OvertimeEntry, ot_id)
+        if ot is None:
+            ot = OvertimeEntry(id=ot_id)
+            session.add(ot)
+
+        ot.employee_id = r.get("EMPLOYEEID", 0) or 0
+        ot.date = date
+        ot.hours = float(r.get("HOURS", 0) or 0)
+        count += 1
+
+    if skipped:
+        _log.warning("sync_overtime: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_leave_entitlements(session: Session, daten_path: str) -> int:
+    """Sync annual leave entitlements from 5LEAEN.DBF.
+
+    Keyed by year (not a date); rows without an ID are skipped. DBF fields:
+    ENTITLEMNT -> entitlement, REST -> carry_forward, INDAYS -> in_days.
+    """
+    rows = _read_dbf(daten_path, "LEAEN")
+    count = 0
+
+    for r in rows:
+        le_id = r.get("ID")
+        if not le_id:
+            continue
+
+        le = session.get(LeaveEntitlement, le_id)
+        if le is None:
+            le = LeaveEntitlement(id=le_id)
+            session.add(le)
+
+        le.employee_id = r.get("EMPLOYEEID", 0) or 0
+        le.year = r.get("YEAR", 0) or 0
+        le.leave_type_id = r.get("LEAVETYPID", 0) or 0
+        le.entitlement = float(r.get("ENTITLEMNT", 0) or 0)
+        le.carry_forward = float(r.get("REST", 0) or 0)
+        le.in_days = bool(r.get("INDAYS", 1))
+        count += 1
+
+    session.flush()
+    return count
+
+
 def sync_all(engine, daten_path: str) -> dict[str, int]:
     """Sync all supported tables from DBF into the ORM database.
 
@@ -507,6 +605,9 @@ def sync_all(engine, daten_path: str) -> dict[str, int]:
         stats["absences"] = sync_absences(session, daten_path)
         stats["holidays"] = sync_holidays(session, daten_path)
         stats["periods"] = sync_periods(session, daten_path)
+        stats["bookings"] = sync_book(session, daten_path)
+        stats["overtime"] = sync_overtime(session, daten_path)
+        stats["leave_entitlements"] = sync_leave_entitlements(session, daten_path)
         session.commit()
         _log.info("ORM sync complete: %s", stats)
         return stats
