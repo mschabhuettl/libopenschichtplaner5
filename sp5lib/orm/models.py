@@ -667,3 +667,160 @@ class LeaveEntitlement(Base):
             "REST": self.carry_forward,
             "INDAYS": self.in_days,
         }
+
+
+# ── Phase 6: demand, cycles, restrictions (read-mirror completion) ───────────
+# Defined canonically here and re-exported from models_pg.py. StaffingRequirement
+# remains available there as an alias of ShiftDemand. All references are plain
+# indexed integers (no DB-level FK), consistent with the other roster tables.
+
+
+class ShiftDemand(Base):
+    """Recurring shift demand per weekday (Schichtbedarf) — maps to 5SHDEM.DBF."""
+
+    __tablename__ = "staffing_requirements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, default=0)
+    weekday: Mapped[int] = mapped_column(Integer, default=0)
+    shift_id: Mapped[int] = mapped_column(Integer, default=0)
+    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
+    min_staff: Mapped[int] = mapped_column(Integer, default=0, doc="DBF MIN")
+    max_staff: Mapped[int] = mapped_column(Integer, default=0, doc="DBF MAX")
+
+    __table_args__ = (
+        Index("idx_shdem_shift", "shift_id"),
+        Index("idx_shdem_weekday", "weekday"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ShiftDemand(id={self.id}, shift={self.shift_id}, weekday={self.weekday})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "GROUPID": self.group_id,
+            "WEEKDAY": self.weekday,
+            "SHIFTID": self.shift_id,
+            "WORKPLACID": self.workplace_id,
+            "MIN": self.min_staff,
+            "MAX": self.max_staff,
+        }
+
+
+class SpecialDemand(Base):
+    """Date-specific shift demand (Sonderbedarf) — maps to 5SPDEM.DBF."""
+
+    __tablename__ = "special_demands"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, default=0)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    shift_id: Mapped[int] = mapped_column(Integer, default=0)
+    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
+    min_staff: Mapped[int] = mapped_column(Integer, default=0, doc="DBF MIN")
+    max_staff: Mapped[int] = mapped_column(Integer, default=0, doc="DBF MAX")
+
+    __table_args__ = (
+        Index("idx_spdem_date", "date"),
+        Index("idx_spdem_shift", "shift_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SpecialDemand(id={self.id}, date='{self.date}', shift={self.shift_id})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "GROUPID": self.group_id,
+            "DATE": self.date,
+            "SHIFTID": self.shift_id,
+            "WORKPLACID": self.workplace_id,
+            "MIN": self.min_staff,
+            "MAX": self.max_staff,
+        }
+
+
+class Cycle(Base):
+    """Shift rotation cycle definition (Zyklus) — maps to 5CYCLE.DBF."""
+
+    __tablename__ = "cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    size: Mapped[int] = mapped_column(Integer, default=1, doc="Cycle length")
+    unit: Mapped[int] = mapped_column(Integer, default=1)
+    hide: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    def __repr__(self) -> str:
+        return f"<Cycle(id={self.id}, name='{self.name}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "NAME": self.name,
+            "POSITION": self.position,
+            "SIZE": self.size,
+            "UNIT": self.unit,
+            "HIDE": self.hide,
+        }
+
+
+class CycleAssignment(Base):
+    """Employee ↔ rotation-cycle assignment — maps to 5CYASS.DBF."""
+
+    __tablename__ = "cycle_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    cycle_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    start: Mapped[str | None] = mapped_column(String(10), default="")
+    end: Mapped[str | None] = mapped_column(String(10), default="")
+    entrance: Mapped[str | None] = mapped_column(String(10), default="")
+
+    __table_args__ = (Index("idx_cyass_emp", "employee_id"),)
+
+    def __repr__(self) -> str:
+        return f"<CycleAssignment(id={self.id}, emp={self.employee_id}, cycle={self.cycle_id})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "EMPLOYEEID": self.employee_id,
+            "CYCLEID": self.cycle_id,
+            "START": self.start or "",
+            "END": self.end or "",
+            "ENTRANCE": self.entrance or "",
+        }
+
+
+class Restriction(Base):
+    """Employee shift restriction / ban — maps to 5RESTR.DBF.
+
+    The free-text reason is stored in the DBF ``RESERVED`` field.
+    """
+
+    __tablename__ = "restrictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    shift_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    weekday: Mapped[int] = mapped_column(Integer, default=0)
+    restrict: Mapped[int] = mapped_column(Integer, default=1)
+    reason: Mapped[str | None] = mapped_column(String(20), default="", doc="DBF RESERVED")
+
+    __table_args__ = (Index("idx_restr_emp", "employee_id"),)
+
+    def __repr__(self) -> str:
+        return f"<Restriction(id={self.id}, emp={self.employee_id}, shift={self.shift_id})>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "EMPLOYEEID": self.employee_id,
+            "SHIFTID": self.shift_id,
+            "WEEKDAY": self.weekday,
+            "RESTRICT": self.restrict,
+            "RESERVED": self.reason or "",
+        }

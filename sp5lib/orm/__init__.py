@@ -22,6 +22,8 @@ from .models import (
     Absence,
     AccountBooking,
     Company,
+    Cycle,
+    CycleAssignment,
     Employee,
     Group,
     GroupAssignment,
@@ -30,14 +32,19 @@ from .models import (
     LeaveType,
     OvertimeEntry,
     Period,
+    Restriction,
     Shift,
     ShiftAssignment,
+    ShiftDemand,
+    SpecialDemand,
     SpecialShift,
     Workplace,
 )
 from .repository import (
     AbsenceRepository,
     AccountBookingRepository,
+    CycleAssignmentRepository,
+    CycleRepository,
     EmployeeRepository,
     GroupRepository,
     HolidayRepository,
@@ -45,8 +52,11 @@ from .repository import (
     LeaveTypeRepository,
     OvertimeEntryRepository,
     PeriodRepository,
+    RestrictionRepository,
     ShiftAssignmentRepository,
+    ShiftDemandRepository,
     ShiftRepository,
+    SpecialDemandRepository,
     SpecialShiftRepository,
     WorkplaceRepository,
 )
@@ -55,6 +65,7 @@ from .repository import (
 ScheduleEntry = ShiftAssignment
 Booking = AccountBooking
 OvertimeRecord = OvertimeEntry
+StaffingRequirement = ShiftDemand
 
 __all__ = [
     # Engine / session / schema
@@ -84,6 +95,13 @@ __all__ = [
     "OvertimeEntry",
     "OvertimeRecord",
     "LeaveEntitlement",
+    # Demand / cycle / restriction (Phase 6) models
+    "ShiftDemand",
+    "StaffingRequirement",
+    "SpecialDemand",
+    "Cycle",
+    "CycleAssignment",
+    "Restriction",
     # Repositories
     "EmployeeRepository",
     "GroupRepository",
@@ -98,4 +116,9 @@ __all__ = [
     "AccountBookingRepository",
     "OvertimeEntryRepository",
     "LeaveEntitlementRepository",
+    "ShiftDemandRepository",
+    "SpecialDemandRepository",
+    "CycleRepository",
+    "CycleAssignmentRepository",
+    "RestrictionRepository",
 ]

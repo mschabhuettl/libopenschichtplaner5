@@ -24,6 +24,8 @@ from .base import get_session
 from .models import (
     Absence,
     AccountBooking,
+    Cycle,
+    CycleAssignment,
     Employee,
     Group,
     GroupAssignment,
@@ -32,8 +34,11 @@ from .models import (
     LeaveType,
     OvertimeEntry,
     Period,
+    Restriction,
     Shift,
     ShiftAssignment,
+    ShiftDemand,
+    SpecialDemand,
     SpecialShift,
     Workplace,
 )
@@ -586,6 +591,159 @@ def sync_leave_entitlements(session: Session, daten_path: str) -> int:
     return count
 
 
+def sync_shift_demand(session: Session, daten_path: str) -> int:
+    """Sync recurring shift demand from 5SHDEM.DBF (keyed by weekday, no date)."""
+    rows = _read_dbf(daten_path, "SHDEM")
+    count = 0
+
+    for r in rows:
+        dem_id = r.get("ID")
+        if not dem_id:
+            continue
+
+        dem = session.get(ShiftDemand, dem_id)
+        if dem is None:
+            dem = ShiftDemand(id=dem_id)
+            session.add(dem)
+
+        dem.group_id = r.get("GROUPID", 0) or 0
+        dem.weekday = r.get("WEEKDAY", 0) or 0
+        dem.shift_id = r.get("SHIFTID", 0) or 0
+        dem.workplace_id = r.get("WORKPLACID", 0) or 0
+        dem.min_staff = r.get("MIN", 0) or 0
+        dem.max_staff = r.get("MAX", 0) or 0
+        count += 1
+
+    session.flush()
+    return count
+
+
+def sync_special_demand(session: Session, daten_path: str) -> int:
+    """Sync date-specific shift demand from 5SPDEM.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "SPDEM")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        dem_id = r.get("ID")
+        if not dem_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        dem = session.get(SpecialDemand, dem_id)
+        if dem is None:
+            dem = SpecialDemand(id=dem_id)
+            session.add(dem)
+
+        dem.group_id = r.get("GROUPID", 0) or 0
+        dem.date = date
+        dem.shift_id = r.get("SHIFTID", 0) or 0
+        dem.workplace_id = r.get("WORKPLACID", 0) or 0
+        dem.min_staff = r.get("MIN", 0) or 0
+        dem.max_staff = r.get("MAX", 0) or 0
+        count += 1
+
+    if skipped:
+        _log.warning("sync_special_demand: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_cycles(session: Session, daten_path: str) -> int:
+    """Sync rotation-cycle definitions from 5CYCLE.DBF."""
+    rows = _read_dbf(daten_path, "CYCLE")
+    count = 0
+
+    for r in rows:
+        cyc_id = r.get("ID")
+        if not cyc_id:
+            continue
+
+        cyc = session.get(Cycle, cyc_id)
+        if cyc is None:
+            cyc = Cycle(id=cyc_id)
+            session.add(cyc)
+
+        cyc.name = str(r.get("NAME") or "").strip()
+        cyc.position = r.get("POSITION", 0) or 0
+        cyc.size = r.get("SIZE", 1) or 1
+        cyc.unit = r.get("UNIT", 1) or 1
+        cyc.hide = bool(r.get("HIDE"))
+        count += 1
+
+    session.flush()
+    return count
+
+
+def sync_cycle_assignments(session: Session, daten_path: str) -> int:
+    """Sync employee↔cycle assignments from 5CYASS.DBF (full delete + re-insert).
+
+    Like 5GRASG, the DBF ``ID`` is not relied upon as a unique key: the
+    autoincrement PK is used instead and the logical identity
+    ``(employee_id, cycle_id, start)`` is de-duplicated. Rows without an
+    employee or cycle reference are skipped.
+    """
+    rows = _read_dbf(daten_path, "CYASS")
+
+    session.query(CycleAssignment).delete()
+    session.flush()
+
+    count = 0
+    seen: set[tuple[int, int, str]] = set()
+    for r in rows:
+        emp_id = r.get("EMPLOYEEID")
+        cycle_id = r.get("CYCLEID")
+        if not emp_id or not cycle_id:
+            continue
+        start = str(r.get("START") or "").strip()
+        key = (emp_id, cycle_id, start)
+        if key in seen:
+            continue
+        seen.add(key)
+        session.add(
+            CycleAssignment(
+                employee_id=emp_id,
+                cycle_id=cycle_id,
+                start=start,
+                end=str(r.get("END") or "").strip(),
+                entrance=str(r.get("ENTRANCE") or "").strip(),
+            )
+        )
+        count += 1
+
+    session.flush()
+    return count
+
+
+def sync_restrictions(session: Session, daten_path: str) -> int:
+    """Sync employee shift restrictions from 5RESTR.DBF (reason <- RESERVED)."""
+    rows = _read_dbf(daten_path, "RESTR")
+    count = 0
+
+    for r in rows:
+        res_id = r.get("ID")
+        if not res_id:
+            continue
+
+        res = session.get(Restriction, res_id)
+        if res is None:
+            res = Restriction(id=res_id)
+            session.add(res)
+
+        res.employee_id = r.get("EMPLOYEEID", 0) or 0
+        res.shift_id = r.get("SHIFTID", 0) or 0
+        res.weekday = r.get("WEEKDAY", 0) or 0
+        res.restrict = r.get("RESTRICT", 1) or 0
+        res.reason = str(r.get("RESERVED") or "").strip()
+        count += 1
+
+    session.flush()
+    return count
+
+
 def sync_all(engine, daten_path: str) -> dict[str, int]:
     """Sync all supported tables from DBF into the ORM database.
 
@@ -608,6 +766,11 @@ def sync_all(engine, daten_path: str) -> dict[str, int]:
         stats["bookings"] = sync_book(session, daten_path)
         stats["overtime"] = sync_overtime(session, daten_path)
         stats["leave_entitlements"] = sync_leave_entitlements(session, daten_path)
+        stats["shift_demand"] = sync_shift_demand(session, daten_path)
+        stats["special_demand"] = sync_special_demand(session, daten_path)
+        stats["cycles"] = sync_cycles(session, daten_path)
+        stats["cycle_assignments"] = sync_cycle_assignments(session, daten_path)
+        stats["restrictions"] = sync_restrictions(session, daten_path)
         session.commit()
         _log.info("ORM sync complete: %s", stats)
         return stats
