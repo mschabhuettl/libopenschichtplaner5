@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-27
+
+ORM Phase 4 — reference tables (holidays, accounting periods) plus a sync
+robustness fix that lets `sync_all()` run to completion on real data.
+
+### Added
+
+- **`Holiday`** (`holidays`, from `5HOLID.DBF`) and **`Period`** (`periods`,
+  from `5PERIO.DBF`) ORM models, importable from `sp5lib.orm`, with `to_dict()`
+  mirroring the real DBF keys. `init_db()` creates the tables.
+- **`HolidayRepository`** with `list(year=None)` (a given year plus recurring
+  `interval == 1` holidays) and `get(id)`.
+- **`PeriodRepository`** with `list(date_from=None, date_to=None,
+  group_id=None)` and `get(id)`.
+- DBF → ORM upsert `sync.sync_holidays` and `sync.sync_periods`, wired into
+  `sync.sync_all()`.
+
+### Fixed
+
+- `sync.sync_group_assignments` no longer aborts `sync_all` with
+  `UNIQUE constraint failed: group_assignments.id`. The `ID` column in
+  `5GRASG.DBF` is a per-group running index, not a global key, so it is no
+  longer used as the primary key (the autoincrement `id` is). Assignments are
+  de-duplicated on `(employee_id, group_id)`, and rows referencing a
+  non-existent employee or group are skipped and logged. `sync_all()` now
+  completes over the full set of tables.
+
+### Changed
+
+- `Holiday` is now defined canonically in `sp5lib.orm.models` and re-exported
+  from `sp5lib.orm.models_pg` (used by `pg_database`); `Period` is likewise
+  available from both. No behaviour change for existing imports.
+
+### Notes
+
+- `Period` maps the DBF `DESCRIPT` field (the period label) — the request
+  referred to it as `NAME`, but the actual `5PERIO.DBF` field is `DESCRIPT`,
+  which `to_dict()` mirrors (alongside `GROUPID` / `START` / `END` / `COLOR`).
+
 ## [1.3.0] - 2026-05-27
 
 ORM Phase 3 — the time-based roster. Adds the schedule-entry tables to the

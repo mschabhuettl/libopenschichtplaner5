@@ -26,7 +26,9 @@ from .models import (
     Employee,
     Group,
     GroupAssignment,
+    Holiday,
     LeaveType,
+    Period,
     Shift,
     ShiftAssignment,
     SpecialShift,
@@ -171,25 +173,50 @@ def sync_groups(session: Session, daten_path: str) -> int:
 
 
 def sync_group_assignments(session: Session, daten_path: str) -> int:
-    """Sync group assignments from 5GRASG.DBF."""
+    """Sync group assignments from 5GRASG.DBF (full delete + re-insert).
+
+    The ``ID`` column in 5GRASG.DBF is **not** a globally unique key — it is a
+    per-group running index, so the same value repeats across different
+    employee/group pairs. We therefore do NOT use it as the primary key (the
+    autoincrement ``GroupAssignment.id`` does that); the logical identity is the
+    ``UNIQUE(employee_id, group_id)`` pair. Duplicate pairs are de-duplicated,
+    and rows whose employee or group does not exist are skipped (those columns
+    are real FKs, so a dangling reference would otherwise abort the sync).
+    """
     rows = _read_dbf(daten_path, "GRASG")
 
-    # Clear existing assignments and re-insert (simple full-sync approach)
+    # Clear existing assignments and re-insert (simple full-sync approach).
     session.query(GroupAssignment).delete()
     session.flush()
 
+    valid_emp_ids = set(session.scalars(select(Employee.id)).all())
+    valid_group_ids = set(session.scalars(select(Group.id)).all())
+
     count = 0
+    seen: set[tuple[int, int]] = set()
+    skipped_dangling = 0
     for r in rows:
-        ga_id = r.get("ID")
         emp_id = r.get("EMPLOYEEID")
         group_id = r.get("GROUPID")
-        if not ga_id or not emp_id or not group_id:
+        if not emp_id or not group_id:
+            continue
+        pair = (emp_id, group_id)
+        if pair in seen:
+            continue  # duplicate (employee, group) — keep a single assignment
+        if emp_id not in valid_emp_ids or group_id not in valid_group_ids:
+            skipped_dangling += 1
             continue
 
-        ga = GroupAssignment(id=ga_id, employee_id=emp_id, group_id=group_id)
-        session.add(ga)
+        seen.add(pair)
+        # Let the autoincrement PK assign the id; the DBF ID is not unique.
+        session.add(GroupAssignment(employee_id=emp_id, group_id=group_id))
         count += 1
 
+    if skipped_dangling:
+        _log.warning(
+            "sync_group_assignments: skipped %d row(s) with dangling employee/group reference",
+            skipped_dangling,
+        )
     session.flush()
     return count
 
@@ -400,6 +427,67 @@ def sync_absences(session: Session, daten_path: str) -> int:
     return count
 
 
+def sync_holidays(session: Session, daten_path: str) -> int:
+    """Sync public holidays from 5HOLID.DBF (invalid dates skipped)."""
+    rows = _read_dbf(daten_path, "HOLID")
+    count = 0
+    skipped = 0
+
+    for r in rows:
+        hol_id = r.get("ID")
+        if not hol_id:
+            continue
+        date = _valid_date(r.get("DATE"))
+        if date is None:
+            skipped += 1
+            continue
+
+        hol = session.get(Holiday, hol_id)
+        if hol is None:
+            hol = Holiday(id=hol_id)
+            session.add(hol)
+
+        hol.date = date
+        hol.name = str(r.get("NAME") or "").strip()
+        hol.interval = r.get("INTERVAL", 0) or 0
+        count += 1
+
+    if skipped:
+        _log.warning("sync_holidays: skipped %d row(s) with invalid date", skipped)
+    session.flush()
+    return count
+
+
+def sync_periods(session: Session, daten_path: str) -> int:
+    """Sync accounting/planning periods from 5PERIO.DBF.
+
+    The DBF stores the label in DESCRIPT and the owning group in GROUPID
+    (a plain integer, no FK). START/END are date strings as parsed by read_dbf.
+    """
+    rows = _read_dbf(daten_path, "PERIO")
+    count = 0
+
+    for r in rows:
+        per_id = r.get("ID")
+        if not per_id:
+            continue
+
+        per = session.get(Period, per_id)
+        if per is None:
+            per = Period(id=per_id)
+            session.add(per)
+
+        per.group_id = r.get("GROUPID", 0) or 0
+        per.start = str(r.get("START") or "").strip()
+        per.end = str(r.get("END") or "").strip()
+        per.color = r.get("COLOR", 16777215) or 16777215
+        per.description = str(r.get("DESCRIPT") or "").strip()
+        count += 1
+
+    session.flush()
+    return count
+
+
 def sync_all(engine, daten_path: str) -> dict[str, int]:
     """Sync all supported tables from DBF into the ORM database.
 
@@ -417,6 +505,8 @@ def sync_all(engine, daten_path: str) -> dict[str, int]:
         stats["shift_assignments"] = sync_shift_assignments(session, daten_path)
         stats["special_shifts"] = sync_special_shifts(session, daten_path)
         stats["absences"] = sync_absences(session, daten_path)
+        stats["holidays"] = sync_holidays(session, daten_path)
+        stats["periods"] = sync_periods(session, daten_path)
         session.commit()
         _log.info("ORM sync complete: %s", stats)
         return stats

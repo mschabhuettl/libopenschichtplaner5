@@ -24,7 +24,9 @@ from .base import Base
 # working unchanged. ScheduleEntry is the legacy name for ShiftAssignment.
 from .models import (  # noqa: F401,E402
     Absence,
+    Holiday,
     LeaveType,
+    Period,
     Shift,
     ShiftAssignment,
     SpecialShift,
@@ -35,17 +37,6 @@ from .models import (  # noqa: F401,E402
 # called ScheduleEntry. It is now ShiftAssignment (same table "schedule_entries",
 # same columns); keep the old name importable for existing consumers.
 ScheduleEntry = ShiftAssignment
-
-
-class Holiday(Base):
-    __tablename__ = "holidays"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    date: Mapped[str] = mapped_column(String(10), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    interval: Mapped[int] = mapped_column(Integer, default=0)
-
-    def to_dict(self) -> dict:
-        return {"ID": self.id, "DATE": self.date, "NAME": self.name, "INTERVAL": self.interval}
 
 
 class User(Base):

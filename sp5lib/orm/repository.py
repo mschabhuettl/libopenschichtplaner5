@@ -18,7 +18,9 @@ from .models import (
     Employee,
     Group,
     GroupAssignment,
+    Holiday,
     LeaveType,
+    Period,
     Shift,
     ShiftAssignment,
     SpecialShift,
@@ -331,3 +333,60 @@ class AbsenceRepository:
     def get(self, entry_id: int) -> Absence | None:
         """Return a single absence by ID, or None."""
         return self.session.get(Absence, entry_id)
+
+
+class HolidayRepository:
+    """Data access for public holidays (5HOLID.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(self, year: int | None = None) -> list[Holiday]:
+        """Return holidays ordered by date.
+
+        With ``year`` set, returns holidays in that calendar year plus all
+        recurring (``interval == 1``) holidays, which apply every year.
+        """
+        stmt = select(Holiday).order_by(Holiday.date)
+        if year is not None:
+            prefix = f"{year:04d}-"
+            stmt = stmt.where(
+                (Holiday.date.startswith(prefix)) | (Holiday.interval == 1)
+            )
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, holiday_id: int) -> Holiday | None:
+        """Return a single holiday by ID, or None."""
+        return self.session.get(Holiday, holiday_id)
+
+
+class PeriodRepository:
+    """Data access for accounting / planning periods (5PERIO.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        group_id: int | None = None,
+    ) -> list[Period]:
+        """Return periods ordered by start date, optionally filtered.
+
+        ``date_from`` / ``date_to`` filter on the period start date (ISO
+        strings); ``group_id`` restricts to one group.
+        """
+        stmt = select(Period)
+        if date_from is not None:
+            stmt = stmt.where(Period.start >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(Period.start <= date_to)
+        if group_id is not None:
+            stmt = stmt.where(Period.group_id == group_id)
+        stmt = stmt.order_by(Period.start, Period.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, period_id: int) -> Period | None:
+        """Return a single period by ID, or None."""
+        return self.session.get(Period, period_id)

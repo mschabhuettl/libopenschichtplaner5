@@ -507,3 +507,65 @@ class Absence(Base):
             "START": self.start,
             "END": self.end,
         }
+
+
+# ── Phase 4: reference tables (holidays, accounting periods) ─────────────────
+# Holiday is defined canonically here and re-exported from models_pg.py. Period
+# is new in Phase 4. group_id is a plain Integer (no DB-level FK), consistent
+# with the FK-tolerant approach used by the schedule tables.
+
+
+class Holiday(Base):
+    """Public holiday (Feiertag) — maps to 5HOLID.DBF."""
+
+    __tablename__ = "holidays"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date: Mapped[str] = mapped_column(String(10), nullable=False, doc="ISO date YYYY-MM-DD")
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    interval: Mapped[int] = mapped_column(Integer, default=0, doc="1 = recurring every year")
+
+    __table_args__ = (Index("idx_holiday_date", "date"),)
+
+    def __repr__(self) -> str:
+        return f"<Holiday(id={self.id}, date='{self.date}', name='{self.name}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "DATE": self.date,
+            "NAME": self.name,
+            "INTERVAL": self.interval,
+        }
+
+
+class Period(Base):
+    """Accounting / planning period (Periode) — maps to 5PERIO.DBF.
+
+    The DBF stores the label in ``DESCRIPT`` (not ``NAME``); ``to_dict()``
+    mirrors the real DBF keys.
+    """
+
+    __tablename__ = "periods"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, default=0, doc="Owning group (no FK)")
+    start: Mapped[str | None] = mapped_column(String(10), default="", doc="ISO start date")
+    end: Mapped[str | None] = mapped_column(String(10), default="", doc="ISO end date")
+    color: Mapped[int] = mapped_column(Integer, default=16777215)
+    description: Mapped[str | None] = mapped_column(String(200), default="")
+
+    __table_args__ = (Index("idx_period_group", "group_id"),)
+
+    def __repr__(self) -> str:
+        return f"<Period(id={self.id}, start='{self.start}', end='{self.end}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "GROUPID": self.group_id,
+            "START": self.start or "",
+            "END": self.end or "",
+            "COLOR": self.color,
+            "DESCRIPT": self.description or "",
+        }

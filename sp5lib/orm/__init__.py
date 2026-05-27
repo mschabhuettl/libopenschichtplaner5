@@ -24,7 +24,9 @@ from .models import (
     Employee,
     Group,
     GroupAssignment,
+    Holiday,
     LeaveType,
+    Period,
     Shift,
     ShiftAssignment,
     SpecialShift,
@@ -34,7 +36,9 @@ from .repository import (
     AbsenceRepository,
     EmployeeRepository,
     GroupRepository,
+    HolidayRepository,
     LeaveTypeRepository,
+    PeriodRepository,
     ShiftAssignmentRepository,
     ShiftRepository,
     SpecialShiftRepository,
@@ -63,6 +67,9 @@ __all__ = [
     "ScheduleEntry",
     "SpecialShift",
     "Absence",
+    # Reference (Phase 4) models
+    "Holiday",
+    "Period",
     # Repositories
     "EmployeeRepository",
     "GroupRepository",
@@ -72,4 +79,6 @@ __all__ = [
     "ShiftAssignmentRepository",
     "SpecialShiftRepository",
     "AbsenceRepository",
+    "HolidayRepository",
+    "PeriodRepository",
 ]
