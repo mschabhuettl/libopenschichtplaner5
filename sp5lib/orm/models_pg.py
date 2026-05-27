@@ -24,25 +24,32 @@ from .base import Base
 from .models import (  # noqa: F401,E402
     Absence,
     AccountBooking,
+    Cycle,
+    CycleAssignment,
     Holiday,
     LeaveEntitlement,
     LeaveType,
     OvertimeEntry,
     Period,
+    Restriction,
     Shift,
     ShiftAssignment,
+    ShiftDemand,
+    SpecialDemand,
     SpecialShift,
     Workplace,
 )
 
 # Backward-compatible aliases for models that were renamed when they moved to
 # models.py (same tables, same columns) — keep the old names importable:
-#   ScheduleEntry  -> ShiftAssignment (5MASHI, "schedule_entries")
-#   Booking        -> AccountBooking  (5BOOK,  "bookings_pg")
-#   OvertimeRecord -> OvertimeEntry   (5OVER,  "overtime_records")
+#   ScheduleEntry       -> ShiftAssignment (5MASHI, "schedule_entries")
+#   Booking             -> AccountBooking  (5BOOK,  "bookings_pg")
+#   OvertimeRecord      -> OvertimeEntry   (5OVER,  "overtime_records")
+#   StaffingRequirement -> ShiftDemand     (5SHDEM, "staffing_requirements")
 ScheduleEntry = ShiftAssignment
 Booking = AccountBooking
 OvertimeRecord = OvertimeEntry
+StaffingRequirement = ShiftDemand
 
 
 class User(Base):
@@ -79,16 +86,6 @@ class User(Base):
     totp_backup_codes: Mapped[str | None] = mapped_column(Text, default=None)
 
 
-class Cycle(Base):
-    __tablename__ = "cycles"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    size: Mapped[int] = mapped_column(Integer, default=1)
-    unit: Mapped[int] = mapped_column(Integer, default=1)
-    hide: Mapped[bool] = mapped_column(Boolean, default=False)
-
-
 class CycleEntry(Base):
     __tablename__ = "cycle_entries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -96,16 +93,6 @@ class CycleEntry(Base):
     index: Mapped[int] = mapped_column(Integer, nullable=False)
     shift_id: Mapped[int] = mapped_column(Integer, default=0)
     workplace_id: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class CycleAssignment(Base):
-    __tablename__ = "cycle_assignments"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    cycle_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    start: Mapped[str | None] = mapped_column(String(10), default="")
-    end: Mapped[str | None] = mapped_column(String(10), default="")
-    entrance: Mapped[str | None] = mapped_column(String(10), default="")
 
 
 class Note(Base):
@@ -116,16 +103,6 @@ class Note(Base):
     text1: Mapped[str | None] = mapped_column(Text, default="")
     text2: Mapped[str | None] = mapped_column(Text, default="")
     category: Mapped[str | None] = mapped_column(String(20), default="")
-
-
-class Restriction(Base):
-    __tablename__ = "restrictions"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    employee_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    shift_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    weekday: Mapped[int] = mapped_column(Integer, default=0)
-    restrict: Mapped[int] = mapped_column(Integer, default=1)
-    reason: Mapped[str | None] = mapped_column(String(20), default="")
 
 
 class HolidayBan(Base):
@@ -149,17 +126,6 @@ class ExtraCharge(Base):
     validdays: Mapped[str | None] = mapped_column(String(20), default="0000000")
     holrule: Mapped[int] = mapped_column(Integer, default=0)
     hide: Mapped[bool] = mapped_column(Boolean, default=False)
-
-
-class StaffingRequirement(Base):
-    __tablename__ = "staffing_requirements"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    group_id: Mapped[int] = mapped_column(Integer, default=0)
-    weekday: Mapped[int] = mapped_column(Integer, default=0)
-    shift_id: Mapped[int] = mapped_column(Integer, default=0)
-    workplace_id: Mapped[int] = mapped_column(Integer, default=0)
-    min_staff: Mapped[int] = mapped_column(Integer, default=0)
-    max_staff: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Settings(Base):

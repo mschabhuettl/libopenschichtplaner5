@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-05-27
+
+ORM Phase 6 — completes the read-only mirror with the demand, rotation-cycle
+and restriction tables. Additive and backward compatible. `sync_all()` now
+covers 19 tables.
+
+### Added
+
+- **`ShiftDemand`** (`staffing_requirements`, from `5SHDEM.DBF`),
+  **`SpecialDemand`** (`special_demands`, `5SPDEM.DBF`), **`Cycle`** (`cycles`,
+  `5CYCLE.DBF`), **`CycleAssignment`** (`cycle_assignments`, `5CYASS.DBF`) and
+  **`Restriction`** (`restrictions`, `5RESTR.DBF`) ORM models, importable from
+  `sp5lib.orm`, with `to_dict()` mirroring the real DBF keys. `init_db()`
+  creates the tables.
+- Repositories: **`ShiftDemandRepository`** `list(shift_id, weekday, group_id)`,
+  **`SpecialDemandRepository`** `list(date_from, date_to, shift_id)`,
+  **`CycleRepository`** `list(include_hidden=False)`,
+  **`CycleAssignmentRepository`** `list(employee_id, cycle_id)`,
+  **`RestrictionRepository`** `list(employee_id, shift_id)` — all with `get(id)`.
+- DBF → ORM upsert `sync.sync_shift_demand`, `sync.sync_special_demand`,
+  `sync.sync_cycles`, `sync.sync_cycle_assignments`, `sync.sync_restrictions`,
+  wired into `sync.sync_all()`. `5SPDEM` rows with a blank/invalid `DATE` are
+  skipped and logged. `sync_cycle_assignments` follows the 5GRASG pattern
+  (autoincrement PK, de-dup on `(employee_id, cycle_id, start)`) since the DBF
+  `ID` is not guaranteed unique.
+
+### Changed
+
+- `ShiftDemand` / `Cycle` / `CycleAssignment` / `Restriction` are defined
+  canonically in `sp5lib.orm.models` and re-exported from `sp5lib.orm.models_pg`.
+  The previous name **`StaffingRequirement`** (→ `ShiftDemand`) remains
+  importable as an alias (same table `staffing_requirements`), so existing
+  imports keep working.
+
+### Notes
+
+- DBF field mapping (verified against `database.py`): 5SHDEM/5SPDEM `MIN`/`MAX`;
+  5RESTR free-text reason is the `RESERVED` field (`to_dict()` exposes it as
+  `RESERVED`). 5CYCLE length is `SIZE`/`UNIT`.
+
 ## [1.5.0] - 2026-05-27
 
 ORM Phase 5 — account bookings, overtime and leave entitlements (the data

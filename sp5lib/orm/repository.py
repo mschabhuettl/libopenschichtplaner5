@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from .models import (
     Absence,
     AccountBooking,
+    Cycle,
+    CycleAssignment,
     Employee,
     Group,
     GroupAssignment,
@@ -24,8 +26,11 @@ from .models import (
     LeaveType,
     OvertimeEntry,
     Period,
+    Restriction,
     Shift,
     ShiftAssignment,
+    ShiftDemand,
+    SpecialDemand,
     SpecialShift,
     Workplace,
 )
@@ -474,3 +479,127 @@ class LeaveEntitlementRepository:
     def get(self, entitlement_id: int) -> LeaveEntitlement | None:
         """Return a single entitlement by ID, or None."""
         return self.session.get(LeaveEntitlement, entitlement_id)
+
+
+class ShiftDemandRepository:
+    """Data access for recurring shift demand (5SHDEM.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        shift_id: int | None = None,
+        weekday: int | None = None,
+        group_id: int | None = None,
+    ) -> list[ShiftDemand]:
+        """Return shift demand rows, optionally filtered by shift/weekday/group."""
+        stmt = select(ShiftDemand)
+        if shift_id is not None:
+            stmt = stmt.where(ShiftDemand.shift_id == shift_id)
+        if weekday is not None:
+            stmt = stmt.where(ShiftDemand.weekday == weekday)
+        if group_id is not None:
+            stmt = stmt.where(ShiftDemand.group_id == group_id)
+        stmt = stmt.order_by(ShiftDemand.weekday, ShiftDemand.shift_id, ShiftDemand.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, demand_id: int) -> ShiftDemand | None:
+        """Return a single shift-demand row by ID, or None."""
+        return self.session.get(ShiftDemand, demand_id)
+
+
+class SpecialDemandRepository:
+    """Data access for date-specific shift demand (5SPDEM.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        shift_id: int | None = None,
+    ) -> list[SpecialDemand]:
+        """Return special demand rows filtered by ISO date range and/or shift."""
+        stmt = select(SpecialDemand)
+        if date_from is not None:
+            stmt = stmt.where(SpecialDemand.date >= date_from)
+        if date_to is not None:
+            stmt = stmt.where(SpecialDemand.date <= date_to)
+        if shift_id is not None:
+            stmt = stmt.where(SpecialDemand.shift_id == shift_id)
+        stmt = stmt.order_by(SpecialDemand.date, SpecialDemand.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, demand_id: int) -> SpecialDemand | None:
+        """Return a single special-demand row by ID, or None."""
+        return self.session.get(SpecialDemand, demand_id)
+
+
+class CycleRepository:
+    """Data access for rotation-cycle definitions (5CYCLE.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(self, include_hidden: bool = False) -> list[Cycle]:
+        """Return all cycles, ordered by position."""
+        stmt = select(Cycle).order_by(Cycle.position)
+        if not include_hidden:
+            stmt = stmt.where(Cycle.hide == False)  # noqa: E712
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, cycle_id: int) -> Cycle | None:
+        """Return a single cycle by ID, or None."""
+        return self.session.get(Cycle, cycle_id)
+
+
+class CycleAssignmentRepository:
+    """Data access for employee ↔ cycle assignments (5CYASS.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        employee_id: int | None = None,
+        cycle_id: int | None = None,
+    ) -> list[CycleAssignment]:
+        """Return cycle assignments, optionally filtered by employee/cycle."""
+        stmt = select(CycleAssignment)
+        if employee_id is not None:
+            stmt = stmt.where(CycleAssignment.employee_id == employee_id)
+        if cycle_id is not None:
+            stmt = stmt.where(CycleAssignment.cycle_id == cycle_id)
+        stmt = stmt.order_by(CycleAssignment.employee_id, CycleAssignment.start, CycleAssignment.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, assignment_id: int) -> CycleAssignment | None:
+        """Return a single cycle assignment by ID, or None."""
+        return self.session.get(CycleAssignment, assignment_id)
+
+
+class RestrictionRepository:
+    """Data access for employee shift restrictions (5RESTR.DBF)."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def list(
+        self,
+        employee_id: int | None = None,
+        shift_id: int | None = None,
+    ) -> list[Restriction]:
+        """Return restrictions, optionally filtered by employee/shift."""
+        stmt = select(Restriction)
+        if employee_id is not None:
+            stmt = stmt.where(Restriction.employee_id == employee_id)
+        if shift_id is not None:
+            stmt = stmt.where(Restriction.shift_id == shift_id)
+        stmt = stmt.order_by(Restriction.employee_id, Restriction.id)
+        return list(self.session.scalars(stmt).all())
+
+    def get(self, restriction_id: int) -> Restriction | None:
+        """Return a single restriction by ID, or None."""
+        return self.session.get(Restriction, restriction_id)

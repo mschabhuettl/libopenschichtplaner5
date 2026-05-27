@@ -17,6 +17,10 @@ from sp5lib.orm import (
     AbsenceRepository,
     AccountBooking,
     AccountBookingRepository,
+    Cycle,
+    CycleAssignment,
+    CycleAssignmentRepository,
+    CycleRepository,
     Employee,
     Group,
     GroupAssignment,
@@ -30,11 +34,17 @@ from sp5lib.orm import (
     OvertimeEntryRepository,
     Period,
     PeriodRepository,
+    Restriction,
+    RestrictionRepository,
     ScheduleEntry,
     Shift,
     ShiftAssignment,
     ShiftAssignmentRepository,
+    ShiftDemand,
+    ShiftDemandRepository,
     ShiftRepository,
+    SpecialDemand,
+    SpecialDemandRepository,
     SpecialShift,
     SpecialShiftRepository,
     Workplace,
@@ -691,5 +701,175 @@ def test_sync_all_includes_phase5_tables(engine, monkeypatch):
     assert stats["bookings"] == 1
     assert stats["overtime"] == 1
     assert stats["leave_entitlements"] == 1
-    # full table coverage: 14 logical tables in sync_all
-    assert len(stats) == 14
+
+
+# ─── Phase 6: demand / cycles / restrictions ────────────────────────────────────
+
+
+def test_init_db_creates_phase6_tables(engine):
+    from sqlalchemy import inspect
+
+    tables = set(inspect(engine).get_table_names())
+    assert {
+        "staffing_requirements", "special_demands", "cycles",
+        "cycle_assignments", "restrictions",
+    } <= tables
+
+
+def test_phase6_aliases_and_reexport():
+    from sp5lib.orm import StaffingRequirement, models, models_pg
+
+    assert StaffingRequirement is ShiftDemand
+    assert models_pg.StaffingRequirement is ShiftDemand
+    assert models_pg.Cycle is models.Cycle is Cycle
+    assert models_pg.CycleAssignment is CycleAssignment
+    assert models_pg.Restriction is Restriction
+
+
+def test_shift_demand_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                ShiftDemand(id=1, shift_id=1, weekday=1, group_id=5, min_staff=2, max_staff=4),
+                ShiftDemand(id=2, shift_id=2, weekday=1, group_id=5, min_staff=1, max_staff=2),
+                ShiftDemand(id=3, shift_id=1, weekday=2, group_id=5, min_staff=3, max_staff=3),
+            ]
+        )
+        session.flush()
+        repo = ShiftDemandRepository(session)
+        assert [d.id for d in repo.list(shift_id=1)] == [1, 3]
+        assert [d.id for d in repo.list(weekday=1)] == [1, 2]
+        assert [d.id for d in repo.list(shift_id=1, weekday=2)] == [3]
+        assert repo.get(2).max_staff == 2
+
+
+def test_special_demand_repository(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                SpecialDemand(id=1, date="2026-01-05", shift_id=1, min_staff=2, max_staff=3),
+                SpecialDemand(id=2, date="2026-02-10", shift_id=2, min_staff=1, max_staff=1),
+            ]
+        )
+        session.flush()
+        repo = SpecialDemandRepository(session)
+        assert [d.id for d in repo.list(date_from="2026-02-01")] == [2]
+        assert [d.id for d in repo.list(shift_id=1)] == [1]
+        assert repo.get(1).max_staff == 3
+
+
+def test_cycle_repository_hide_filter(engine):
+    with session_scope(engine) as session:
+        session.add_all(
+            [
+                Cycle(id=1, name="Rotation A", position=1),
+                Cycle(id=2, name="Alt", position=2, hide=True),
+            ]
+        )
+        session.flush()
+        repo = CycleRepository(session)
+        assert [c.id for c in repo.list()] == [1]
+        assert [c.id for c in repo.list(include_hidden=True)] == [1, 2]
+        assert repo.get(1).name == "Rotation A"
+
+
+def test_cycle_assignment_and_restriction_repositories(engine):
+    with session_scope(engine) as session:
+        session.add(CycleAssignment(id=1, employee_id=10, cycle_id=1, start="2026-01-01"))
+        session.add(CycleAssignment(id=2, employee_id=11, cycle_id=1, start="2026-01-01"))
+        session.add(Restriction(id=1, employee_id=10, shift_id=3, weekday=1, reason="kein Nachtdienst"))
+        session.flush()
+        ca_repo = CycleAssignmentRepository(session)
+        assert [a.id for a in ca_repo.list(cycle_id=1)] == [1, 2]
+        assert [a.id for a in ca_repo.list(employee_id=11)] == [2]
+        r_repo = RestrictionRepository(session)
+        assert r_repo.list(employee_id=10)[0].reason == "kein Nachtdienst"
+        assert r_repo.list(shift_id=3)[0].id == 1
+
+
+def test_phase6_to_dict_mirror_dbf_keys():
+    assert ShiftDemand(id=1, group_id=5, weekday=1, shift_id=2, workplace_id=0,
+                       min_staff=2, max_staff=4).to_dict() == {
+        "ID": 1, "GROUPID": 5, "WEEKDAY": 1, "SHIFTID": 2, "WORKPLACID": 0, "MIN": 2, "MAX": 4,
+    }
+    assert SpecialDemand(id=1, group_id=0, date="2026-01-05", shift_id=2, workplace_id=0,
+                         min_staff=1, max_staff=3).to_dict() == {
+        "ID": 1, "GROUPID": 0, "DATE": "2026-01-05", "SHIFTID": 2, "WORKPLACID": 0,
+        "MIN": 1, "MAX": 3,
+    }
+    assert Restriction(id=1, employee_id=10, shift_id=3, weekday=1, restrict=1,
+                       reason="x").to_dict() == {
+        "ID": 1, "EMPLOYEEID": 10, "SHIFTID": 3, "WEEKDAY": 1, "RESTRICT": 1, "RESERVED": "x",
+    }
+
+
+def test_sync_phase6_tables(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "SHDEM": [{"ID": 1, "GROUPID": 5, "WEEKDAY": 1, "SHIFTID": 2, "MIN": 2, "MAX": 4}],
+            "SPDEM": [
+                {"ID": 1, "GROUPID": 0, "DATE": "2026-01-05", "SHIFTID": 2, "MIN": 1, "MAX": 3},
+                {"ID": 2, "DATE": "", "SHIFTID": 2},  # invalid date -> skip
+            ],
+            "CYCLE": [{"ID": 1, "NAME": "Rotation A", "SIZE": 14, "UNIT": 1}],
+            "RESTR": [{"ID": 1, "EMPLOYEEID": 10, "SHIFTID": 3, "WEEKDAY": 1,
+                       "RESTRICT": 1, "RESERVED": "kein Nachtdienst"}],
+        },
+    )
+    with session_scope(engine) as session:
+        assert sync.sync_shift_demand(session, "/x") == 1
+        assert sync.sync_special_demand(session, "/x") == 1   # one skipped
+        assert sync.sync_cycles(session, "/x") == 1
+        assert sync.sync_restrictions(session, "/x") == 1
+        assert ShiftDemandRepository(session).get(1).min_staff == 2
+        assert CycleRepository(session).get(1).size == 14
+        assert RestrictionRepository(session).get(1).reason == "kein Nachtdienst"
+
+
+def test_sync_cycle_assignments_non_unique_ids_and_dedup(engine, monkeypatch):
+    # Like 5GRASG: the DBF ID may repeat. Use autoincrement PK (no IntegrityError)
+    # and de-duplicate (employee_id, cycle_id, start).
+    from sqlalchemy import select
+
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {"CYASS": [
+            {"ID": 1, "EMPLOYEEID": 10, "CYCLEID": 1, "START": "2026-01-01"},
+            {"ID": 1, "EMPLOYEEID": 11, "CYCLEID": 1, "START": "2026-01-01"},  # repeated ID
+            {"ID": 2, "EMPLOYEEID": 10, "CYCLEID": 1, "START": "2026-01-01"},  # duplicate pair
+            {"ID": 3, "EMPLOYEEID": 0, "CYCLEID": 1, "START": "2026-01-01"},   # no employee -> skip
+        ]},
+    )
+    with session_scope(engine) as session:
+        assert sync.sync_cycle_assignments(session, "/x") == 2  # (10,1,..) and (11,1,..)
+        rows = list(session.scalars(select(CycleAssignment)).all())
+        assert {(r.employee_id, r.cycle_id) for r in rows} == {(10, 1), (11, 1)}
+        assert len({r.id for r in rows}) == 2  # autoincrement PKs
+
+
+def test_sync_all_includes_phase6_and_covers_19_tables(engine, monkeypatch):
+    from sp5lib.orm import sync
+
+    _patch_dbf(
+        monkeypatch,
+        {
+            "SHDEM": [{"ID": 1, "SHIFTID": 1, "WEEKDAY": 1, "MIN": 1, "MAX": 2}],
+            "SPDEM": [{"ID": 1, "DATE": "2026-01-05", "SHIFTID": 1, "MIN": 1, "MAX": 2}],
+            "CYCLE": [{"ID": 1, "NAME": "A"}],
+            "CYASS": [{"ID": 1, "EMPLOYEEID": 10, "CYCLEID": 1, "START": "2026-01-01"}],
+            "RESTR": [{"ID": 1, "EMPLOYEEID": 10, "SHIFTID": 1}],
+        },
+    )
+    stats = sync.sync_all(engine, "/x")
+    assert stats["shift_demand"] == 1
+    assert stats["special_demand"] == 1
+    assert stats["cycles"] == 1
+    assert stats["cycle_assignments"] == 1
+    assert stats["restrictions"] == 1
+    # full read-mirror coverage: 19 logical tables
+    assert len(stats) == 19
