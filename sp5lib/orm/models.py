@@ -262,3 +262,125 @@ class GroupAssignment(Base):
 
     def __repr__(self) -> str:
         return f"<GroupAssignment(employee_id={self.employee_id}, group_id={self.group_id})>"
+
+
+# ── Phase 2: shift / leave-type / workplace definitions ──────────────────────
+# Canonical, backend-agnostic definitions (work identically on SQLite & Postgres).
+# Re-exported from models_pg.py so existing `from sp5lib.orm.models_pg import …`
+# imports keep working and the SQLite/Postgres schemas stay a single source of truth.
+
+
+class Shift(Base):
+    """Shift definition (Schicht) — maps to 5SHIFT.DBF."""
+
+    __tablename__ = "shifts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, doc="Shift name")
+    shortname: Mapped[str | None] = mapped_column(String(20), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0, doc="Sort order")
+    hide: Mapped[bool] = mapped_column(Boolean, default=False, doc="Soft-deleted / hidden")
+    colortext: Mapped[int] = mapped_column(Integer, default=0)
+    colorbar: Mapped[int] = mapped_column(Integer, default=0)
+    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
+    duration0: Mapped[float] = mapped_column(Float, default=0.0)
+    duration1: Mapped[float] = mapped_column(Float, default=0.0)
+    duration2: Mapped[float] = mapped_column(Float, default=0.0)
+    duration3: Mapped[float] = mapped_column(Float, default=0.0)
+    duration4: Mapped[float] = mapped_column(Float, default=0.0)
+    duration5: Mapped[float] = mapped_column(Float, default=0.0)
+    duration6: Mapped[float] = mapped_column(Float, default=0.0)
+    duration7: Mapped[float] = mapped_column(Float, default=0.0)
+    startend0: Mapped[str | None] = mapped_column(String(50), default="")
+    startend1: Mapped[str | None] = mapped_column(String(50), default="")
+    startend2: Mapped[str | None] = mapped_column(String(50), default="")
+    startend3: Mapped[str | None] = mapped_column(String(50), default="")
+    startend4: Mapped[str | None] = mapped_column(String(50), default="")
+    startend5: Mapped[str | None] = mapped_column(String(50), default="")
+    startend6: Mapped[str | None] = mapped_column(String(50), default="")
+    startend7: Mapped[str | None] = mapped_column(String(50), default="")
+
+    def __repr__(self) -> str:
+        return f"<Shift(id={self.id}, name='{self.name}')>"
+
+    def to_dict(self) -> dict:
+        d = {
+            "ID": self.id,
+            "NAME": self.name,
+            "SHORTNAME": self.shortname or "",
+            "POSITION": self.position,
+            "HIDE": self.hide,
+            "COLORTEXT": self.colortext,
+            "COLORBAR": self.colorbar,
+            "COLORBK": self.colorbk,
+        }
+        for i in range(8):
+            d[f"DURATION{i}"] = getattr(self, f"duration{i}")
+            d[f"STARTEND{i}"] = getattr(self, f"startend{i}") or ""
+        return d
+
+
+class LeaveType(Base):
+    """Leave / absence type (Abwesenheitsart) — maps to 5LEAVT.DBF."""
+
+    __tablename__ = "leave_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, doc="Leave type name")
+    shortname: Mapped[str | None] = mapped_column(String(20), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0, doc="Sort order")
+    hide: Mapped[bool] = mapped_column(Boolean, default=False, doc="Soft-deleted / hidden")
+    entitled: Mapped[bool] = mapped_column(Boolean, default=False)
+    stdentit: Mapped[float] = mapped_column(Float, default=0.0)
+    chargetyp: Mapped[int] = mapped_column(Integer, default=0)
+    colortext: Mapped[int] = mapped_column(Integer, default=0)
+    colorbar: Mapped[int] = mapped_column(Integer, default=0)
+    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
+
+    def __repr__(self) -> str:
+        return f"<LeaveType(id={self.id}, name='{self.name}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "NAME": self.name,
+            "SHORTNAME": self.shortname or "",
+            "POSITION": self.position,
+            "HIDE": self.hide,
+            "ENTITLED": self.entitled,
+            "STDENTIT": self.stdentit,
+            "CHARGETYP": self.chargetyp,
+            "COLORTEXT": self.colortext,
+            "COLORBAR": self.colorbar,
+            "COLORBK": self.colorbk,
+        }
+
+
+class Workplace(Base):
+    """Workplace / location (Arbeitsplatz) — maps to 5WOPL.DBF."""
+
+    __tablename__ = "workplaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, doc="Workplace name")
+    shortname: Mapped[str | None] = mapped_column(String(20), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0, doc="Sort order")
+    hide: Mapped[bool] = mapped_column(Boolean, default=False, doc="Soft-deleted / hidden")
+    colortext: Mapped[int] = mapped_column(Integer, default=0)
+    colorbar: Mapped[int] = mapped_column(Integer, default=0)
+    colorbk: Mapped[int] = mapped_column(Integer, default=16777215)
+
+    def __repr__(self) -> str:
+        return f"<Workplace(id={self.id}, name='{self.name}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "ID": self.id,
+            "NAME": self.name,
+            "SHORTNAME": self.shortname or "",
+            "POSITION": self.position,
+            "HIDE": self.hide,
+            "COLORTEXT": self.colortext,
+            "COLORBAR": self.colorbar,
+            "COLORBK": self.colorbk,
+        }

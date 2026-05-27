@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-27
+
+ORM Phase 2 — adds the next three core entities to the SQLAlchemy layer
+(`sp5lib.orm`), mirroring the Phase 1 Employee/Group patterns. Additive and
+backward compatible.
+
+### Added
+
+- **`Shift`** (`shifts`, from `5SHIFT.DBF`), **`LeaveType`** (`leave_types`,
+  `5LEAVT.DBF`) and **`Workplace`** (`workplaces`, `5WOPL.DBF`) ORM models,
+  importable directly from `sp5lib.orm`. `init_db()` creates the tables.
+- **`ShiftRepository`**, **`LeaveTypeRepository`**, **`WorkplaceRepository`**
+  with `list(include_hidden=False)` and `get(id)`.
+- DBF → ORM upsert for the three tables via `sync.sync_shifts`,
+  `sync.sync_leave_types`, `sync.sync_workplaces`; `sync.sync_all()` now also
+  returns `shifts` / `leave_types` / `workplaces` counts.
+- ORM unit tests (`tests/test_orm.py`, in-memory SQLite) covering models,
+  repositories, `to_dict()` and the sync upsert.
+
+### Changed
+
+- `Shift`, `LeaveType` and `Workplace` are now defined canonically in
+  `sp5lib.orm.models` and **re-exported** from `sp5lib.orm.models_pg` (single
+  source of truth, identical `to_dict()`). Existing
+  `from sp5lib.orm.models_pg import Shift, LeaveType, Workplace` imports keep
+  working unchanged.
+
 ## [1.1.0] - 2026-05-26
 
 Initial standalone release of **libopenschichtplaner5** (import name `sp5lib`).
