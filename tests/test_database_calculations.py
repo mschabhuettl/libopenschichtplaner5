@@ -387,6 +387,36 @@ def test_forfeit_rest_cuts_to_consumption(tmp_path):
     assert again["total_forfeited"] == pytest.approx(0.0)
 
 
+# ─── 3.9.1 Freier Auswertungszeitraum (Gap C-1) ───────────────────────────────
+
+
+def test_statistics_free_period(tmp_path):
+    """Spec 3.9.1: get_statistics über [von, bis] — Monatskomfort bleibt."""
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5HOLID": HOLIDAYS_2014,
+        "5SHIFT": [DAY_SHIFT],
+        "5MASHI": [
+            {"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-01"},
+            {"ID": 2, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-15"},
+        ],
+    })
+    by_month = db.get_statistics(2014, 12)[0]
+    by_period = db.get_statistics(date_from="2014-12-01", date_to="2014-12-31")[0]
+    assert by_period == by_month
+
+    # Teilzeitraum 1.–7.12.: nur der Dienst am 1.12., Soll = 1 Woche (38,5)
+    partial = db.get_statistics(date_from="2014-12-01", date_to="2014-12-07")[0]
+    assert partial["actual_hours"] == pytest.approx(8.0)
+    assert partial["target_hours"] == pytest.approx(38.5)
+    assert partial["shifts_count"] == 1
+
+    with pytest.raises(ValueError):
+        db.get_statistics(date_from="2014-12-31", date_to="2014-12-01")
+    with pytest.raises(ValueError):
+        db.get_statistics()
+
+
 # ─── 3.9.2/3.9.3 Personaltabelle (Gap C-3) ────────────────────────────────────
 
 

@@ -2149,15 +2149,37 @@ class SP5Database:
 
     # ── Monthly statistics ────────────────────────────────────
     def get_statistics(
-        self, year: int, month: int, group_id: int | None = None
+        self,
+        year: int | None = None,
+        month: int | None = None,
+        group_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> list[dict]:
-        """Return per-employee statistics for a month.
+        """Return per-employee statistics for a month or a free period.
 
         Ist-/Sollstunden folgen GetActualHours/GetNominalHours der
         Berechnungsschicht (Spec 3.3/3.4): CALCBASE-Dispatcher, tagindex-
         korrekte Schichtstunden, 5SPSHI-Ersetzung, expandierte 5CYASS,
         Abwesenheits-Anrechnung (3.5) und 5BOOK-Konten (3.6).
+
+        Auswertungszeitraum (Spec 3.9.1): entweder ``year``+``month``
+        (Monats-Komfort) oder ein freier Zeitraum ``date_from``/``date_to``
+        (ISO-Datum, beide erforderlich; hat Vorrang vor year/month).
         """
+        if date_from is not None and date_to is not None:
+            von = date.fromisoformat(str(date_from))
+            bis = date.fromisoformat(str(date_to))
+            if von > bis:
+                raise ValueError("date_from muss <= date_to sein")
+        elif year is None or month is None:
+            raise ValueError(
+                "Entweder year+month oder date_from+date_to angeben"
+            )
+        else:
+            von = date(year, month, 1)
+            bis = self._last_of_month(year, month)
+
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
@@ -2175,8 +2197,6 @@ class SP5Database:
                     emp_group[mid] = grp.get("NAME", "")
                     emp_group_id[mid] = gid
 
-        von = date(year, month, 1)
-        bis = self._last_of_month(year, month)
         inputs = self._calc_inputs(von, bis)
         lt_map = inputs["leave_types_by_id"]
         lo, hi = von.isoformat(), bis.isoformat()
