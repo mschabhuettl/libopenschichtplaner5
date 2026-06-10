@@ -2247,6 +2247,134 @@ class SP5Database:
 
         return result
 
+    # ── Personaltabelle (Spec 3.9.2/3.9.3) ────────────────────
+    def get_personnel_table(
+        self, date_from: str, date_to: str, group_id: int | None = None
+    ) -> dict:
+        """Personaltabelle über einen freien Auswertungszeitraum (Spec 3.9).
+
+        Standard-Spalten je Mitarbeiter über calc.personnel_table_row
+        (Iststunden/Sollstunden/Saldo/Arbeitszeit/Abwesenheit bezahlt/
+        Sonntag/Feiertag/Sonderdienste, Spec 3.9.2). Dynamische Spalten:
+        Einteilungen je Schichtart (3.9.3 Nr. 4, calc.shift_assignment_counts)
+        und Fehltage je Abwesenheitsart (Nr. 5, calc.absence_days_by_type).
+        Umfasst der Zeitraum genau ein Kalenderjahr, liefern
+        anspruchsverbundene Arten zusätzlich den Doppelwert
+        genommen/verbleibend (Nr. 6, calc.leave_account).
+        """
+        von = date.fromisoformat(str(date_from))
+        bis = date.fromisoformat(str(date_to))
+        if von > bis:
+            raise ValueError("date_from muss <= date_to sein")
+
+        employees = self.get_employees(include_hidden=False)
+        if group_id is not None:
+            member_ids = set(self.get_group_members(group_id))
+            employees = [e for e in employees if e["ID"] in member_ids]
+
+        inputs = self._calc_inputs(von, bis)
+        lt_map = inputs["leave_types_by_id"]
+        leave_types = list(lt_map.values())
+
+        # Spec 3.9.3 Nr. 6: Doppelwert nur bei genau einem Kalenderjahr
+        one_year = (
+            von == date(von.year, 1, 1) and bis == date(von.year, 12, 31)
+        )
+        leaen_by_emp: dict[int, list[dict]] = {}
+        if one_year:
+            for r in self._read("LEAEN"):
+                leaen_by_emp.setdefault(r.get("EMPLOYEEID"), []).append(r)
+
+        rows = []
+        for emp in employees:
+            eid = emp["ID"]
+            ctx = self._calc_context(emp)
+            plan = self._plan_kwargs(inputs, eid)
+            absences = inputs["absences"].get(eid, [])
+            bookings = inputs["bookings"].get(eid, [])
+
+            std = calc.personnel_table_row(
+                ctx,
+                von,
+                bis,
+                absences=absences,
+                leave_types_by_id=lt_map,
+                bookings=bookings,
+                **plan,
+            )
+            shift_counts = calc.shift_assignment_counts(
+                ctx,
+                von,
+                bis,
+                manual_shifts=plan["manual_shifts"],
+                cycle_shifts=plan["cycle_shifts"],
+            )
+            absence_days = calc.absence_days_by_type(
+                ctx,
+                von,
+                bis,
+                holidays=inputs["holidays"],
+                absences=absences,
+                leave_types_by_id=lt_map,
+            )
+            row = {
+                "employee_id": eid,
+                "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                    ", "
+                ),
+                "employee_short": emp.get("SHORTNAME", ""),
+                **{
+                    k: round(v, 2) if isinstance(v, float) else v
+                    for k, v in std.items()
+                },
+                "shift_counts": shift_counts,
+                "absence_days_by_type": {
+                    lt_id: round(days, 2) for lt_id, days in absence_days.items()
+                },
+            }
+            if one_year:
+                accounts = {}
+                for lt in leave_types:
+                    if not lt.get("ENTITLED"):
+                        continue
+                    acct = calc.leave_account(
+                        ctx,
+                        von.year,
+                        lt,
+                        holidays=inputs["holidays"],
+                        entitlements=leaen_by_emp.get(eid, []),
+                        absences=absences,
+                    )
+                    accounts[lt["ID"]] = {
+                        "taken": round(acct.taken, 2),
+                        "remaining": round(acct.remaining, 2),
+                    }
+                row["leave_accounts"] = accounts
+            rows.append(row)
+
+        return {
+            "date_from": von.isoformat(),
+            "date_to": bis.isoformat(),
+            "group_id": group_id,
+            "one_year": one_year,
+            "columns": {
+                "shifts": [
+                    {"id": s["ID"], "name": s.get("NAME", ""), "short": s.get("SHORTNAME", "")}
+                    for s in self.get_shifts(include_hidden=False)
+                ],
+                "leave_types": [
+                    {
+                        "id": lt["ID"],
+                        "name": lt.get("NAME", ""),
+                        "short": lt.get("SHORTNAME", ""),
+                        "entitled": bool(lt.get("ENTITLED")),
+                    }
+                    for lt in self.get_leave_types(include_hidden=False)
+                ],
+            },
+            "rows": rows,
+        }
+
     # ── Year overview ─────────────────────────────────────────
     def get_schedule_year(self, year: int, employee_id: int) -> list[dict]:
         """Return schedule summary per month for a given employee.

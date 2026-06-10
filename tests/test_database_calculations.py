@@ -387,6 +387,61 @@ def test_forfeit_rest_cuts_to_consumption(tmp_path):
     assert again["total_forfeited"] == pytest.approx(0.0)
 
 
+# ─── 3.9.2/3.9.3 Personaltabelle (Gap C-3) ────────────────────────────────────
+
+
+def test_personnel_table_standard_and_dynamic_columns(tmp_path):
+    """Spec 3.9.2/3.9.3: Standard-Spalten, Spalten je Schicht-/Abwesenheitsart
+    und der Urlaubs-Doppelwert genommen/verbleibend bei Ein-Jahres-Zeitraum."""
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5HOLID": HOLIDAYS_2014,
+        "5SHIFT": [DAY_SHIFT],
+        "5LEAVT": [URLAUB],
+        "5LEAEN": [{"ID": 1, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 1,
+                    "ENTITLEMNT": 30.0, "REST": 0.0, "INDAYS": 1}],
+        "5MASHI": [
+            {"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-01"},  # Mo
+            {"ID": 2, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-07"},  # So
+        ],
+        "5SPSHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 0, "DATE": "2014-12-13",
+                    "STARTEND": "08:00-12:00", "DURATION": 4.0, "NOEXTRA": 0,
+                    "TYPE": 0}],
+        "5ABSEN": [
+            {"ID": 1, "EMPLOYEEID": 1, "DATE": "2014-12-02", "LEAVETYPID": 1,
+             "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0},   # ganzer Tag
+            {"ID": 2, "EMPLOYEEID": 1, "DATE": "2014-12-03", "LEAVETYPID": 1,
+             "TYPE": 0, "INTERVAL": 1, "START": 0, "END": 0},   # halber Tag
+        ],
+    })
+
+    # Monatszeitraum: Standard- und dynamische Spalten, kein Doppelwert
+    table = db.get_personnel_table("2014-12-01", "2014-12-31")
+    assert table["one_year"] is False
+    row = table["rows"][0]
+    # Arbeitszeit: Mo 8 h (So-Dienst ohne So-Fenster = 0) + Sonderdienst 4 h
+    assert row["arbeitszeit"] == pytest.approx(12.0)
+    # Abwesenheit bezahlt: 1,5 Tage Urlaub à 7,7 h
+    assert row["abwesenheit_bezahlt"] == pytest.approx(1.5 * 7.7)
+    # EMP_WEEK ist der normative Fall (CALCBASE=1, DEDUCTHOL=1): 157,85 h
+    assert row["sollstunden"] == pytest.approx(157.85)
+    assert row["iststunden"] == pytest.approx(12.0 + 1.5 * 7.7)
+    assert row["saldo"] == pytest.approx(row["iststunden"] - row["sollstunden"])
+    assert row["sonntag"] == 1
+    assert row["feiertag"] == 0
+    assert row["sonderdienste"] == 1
+    assert row["shift_counts"] == {1: 2}  # 3.9.3 Nr. 4 (nur 5MASHI/5CYASS)
+    assert row["absence_days_by_type"][1] == pytest.approx(1.5)  # Nr. 5
+    assert "leave_accounts" not in row
+
+    # Ein-Jahres-Zeitraum: Doppelwert genommen/verbleibend (Nr. 6)
+    table = db.get_personnel_table("2014-01-01", "2014-12-31")
+    assert table["one_year"] is True
+    acct = table["rows"][0]["leave_accounts"][1]
+    assert acct["taken"] == pytest.approx(1.5)
+    assert acct["remaining"] == pytest.approx(28.5)
+
+
 # ─── 3.9.4 Personalauslastung (Gap C-4) ───────────────────────────────────────
 
 
