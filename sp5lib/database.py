@@ -95,37 +95,6 @@ class SP5Database:
                 record[key + "_LIGHT"] = is_light_color(record[key])
         return record
 
-    # ── Helpers ────────────────────────────────────────────────
-    def _count_working_days(
-        self,
-        year: int,
-        month: int,
-        workdays_list: list | None = None,
-        holiday_dates: set | None = None,
-    ) -> int:
-        """Count working days in a month, using WORKDAYS_LIST when available.
-
-        workdays_list: list of 7+ bools [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
-        Falls back to Mon-Fri (weekday < 5) if not provided or too short.
-        holiday_dates: set of date strings "YYYY-MM-DD" to exclude from count.
-        """
-        num_days = calendar.monthrange(year, month)[1]
-        hd = holiday_dates or set()
-        if workdays_list and len(workdays_list) >= 7:
-            return sum(
-                1
-                for d in range(1, num_days + 1)
-                if workdays_list[datetime(year, month, d).weekday()]
-                and f"{year:04d}-{month:02d}-{d:02d}" not in hd
-            )
-        # Default: Mon-Fri
-        return sum(
-            1
-            for d in range(1, num_days + 1)
-            if datetime(year, month, d).weekday() < 5
-            and f"{year:04d}-{month:02d}-{d:02d}" not in hd
-        )
-
     # ── Berechnungsschicht-Adapter (sp5lib.calculations, Spec Kap. 3) ──
     def _calc_holidays(self) -> dict[date, int]:
         """5HOLID als date->INTERVAL-Kalender (0 = ganztägig, sonst halb)."""
@@ -3436,18 +3405,6 @@ class SP5Database:
     ) -> int:
         """Calculate overlap in minutes between two simple (non-wrapping) time intervals."""
         return max(0, min(a_end, b_end) - max(a_start, b_start))
-
-    def _time_window_overlap_minutes(self, s1: int, e1: int, s2: int, e2: int) -> int:
-        """Calculate overlap in minutes between two time windows (may wrap overnight)."""
-
-        def intervals(start: int, end: int) -> list[tuple[int, int]]:
-            return [(start, end)] if start <= end else [(start, 1440), (0, end)]
-
-        total = 0
-        for a_s, a_e in intervals(s1, e1):
-            for b_s, b_e in intervals(s2, e2):
-                total += self._interval_overlap_minutes(a_s, a_e, b_s, b_e)
-        return total
 
     def _get_shift_time_range(
         self, shift: dict, weekday: int
