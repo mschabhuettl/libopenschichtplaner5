@@ -3431,15 +3431,6 @@ class SP5Database:
         return None
 
     @staticmethod
-    def _is_validday_active(validdays: str, weekday: int) -> bool:
-        """Check if weekday (0=Mon, 6=Sun) is active in VALIDDAYS string."""
-        if not validdays or weekday < 0 or weekday >= len(validdays):
-            return True
-        c = validdays[weekday]
-        code = ord(c)
-        return code == 0x31 or code == 0x2031 or c == "1"
-
-    @staticmethod
     def _interval_overlap_minutes(
         a_start: int, a_end: int, b_start: int, b_end: int
     ) -> int:
@@ -3483,85 +3474,47 @@ class SP5Database:
         """
         Calculate surcharge hours per ExtraCharge rule for a given month.
         Returns a list of dicts: { charge_id, charge_name, hours, shift_count, ... }
+
+        Spec 3.8 über die Berechnungsschicht: VALIDDAYS als Maske geparst,
+        Fensterschnitt statt DURATION-Sonderfall (END=0 → 1440), Tagindex 7,
+        bis zu 3 Teilfenster, Tageswechsel-Split, VALIDITY=1, halbe Feiertage,
+        NOEXTRA (bei 5SPSHI via SHIFTID-Weiche), expandierte 5CYASS.
+        ``shift_count`` zählt Mitarbeiter-Tage mit Zuschlagsstunden > 0.
         """
-        prefix = f"{year:04d}-{month:02d}"
         charges = self.get_extracharges(include_hidden=False)
         if not charges:
             return []
 
-        holiday_dates = self.get_holiday_dates(year)
-        shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        inputs = self._calc_inputs(von, bis, employee_id)
 
-        entries = []
-        for r in self._read("MASHI"):
-            d = r.get("DATE", "")
-            if not d or not d.startswith(prefix):
-                continue
-            eid = r.get("EMPLOYEEID")
-            if employee_id is not None and eid != employee_id:
-                continue
-            entries.append(
-                {"employee_id": eid, "date": d, "shift_id": r.get("SHIFTID")}
-            )
-
-        for r in self._read("SPSHI"):
-            d = r.get("DATE", "")
-            if not d or not d.startswith(prefix):
-                continue
-            eid = r.get("EMPLOYEEID")
-            if employee_id is not None and eid != employee_id:
-                continue
-            entries.append(
-                {"employee_id": eid, "date": d, "shift_id": r.get("SHIFTID")}
-            )
+        employees = self.get_employees(include_hidden=True)
+        if employee_id is not None:
+            employees = [e for e in employees if e["ID"] == employee_id]
 
         charge_acc: dict[int, dict] = {
             c["ID"]: {"hours": 0.0, "count": 0, "charge": c} for c in charges
         }
 
-        for entry in entries:
-            date_str = entry["date"]
-            try:
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-            except ValueError:
+        for emp in employees:
+            eid = emp["ID"]
+            plan = self._plan_kwargs(inputs, eid)
+            if not (
+                plan["manual_shifts"] or plan["cycle_shifts"] or plan["special_shifts"]
+            ):
                 continue
-
-            weekday = dt.weekday()  # 0=Mon, 6=Sun
-            is_holiday = date_str in holiday_dates
-            shift = shifts_map.get(entry.get("shift_id"))
-            if not shift:
-                continue
-
-            shift_start, shift_end, shift_duration = self._get_shift_time_range(
-                shift, weekday
-            )
-
+            ctx = self._calc_context(emp)
+            intervals = calc.daily_work_intervals(ctx, von, bis, **plan)
             for c in charges:
-                cid = c["ID"]
-                holrule = c.get("HOLRULE", 0)
-                if holrule == 1 and not is_holiday:
-                    continue
-                if holrule == 2 and is_holiday:
-                    continue
-                if not self._is_validday_active(c.get("VALIDDAYS", ""), weekday):
-                    continue
-
-                c_start = c.get("START", 0)
-                c_end = c.get("END", 0)
-
-                if c_start == 0 and c_end == 0:
-                    overlap_h = shift_duration
-                elif shift_start is not None and shift_end is not None:
-                    overlap_min = self._time_window_overlap_minutes(
-                        shift_start, shift_end, c_start, c_end
+                acc = charge_acc[c["ID"]]
+                for d, work in intervals.items():
+                    hours = calc.extracharge_hours_on_day(
+                        c, d, work, holidays=inputs["holidays"]
                     )
-                    overlap_h = overlap_min / 60.0
-                else:
-                    overlap_h = 0.0
-
-                if overlap_h > 0:
-                    charge_acc[cid]["hours"] += overlap_h
-                    charge_acc[cid]["count"] += 1
+                    if hours > calc.EPSILON:
+                        acc["hours"] += hours
+                        acc["count"] += 1
 
         return [
             {

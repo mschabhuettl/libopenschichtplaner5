@@ -335,3 +335,60 @@ def test_annual_close_per_type_no_cap(tmp_path):
     assert set(rows) == {1}
     assert rows[1]["entitlement"] == pytest.approx(30.0)  # STDENTIT-Vorbelegung
     assert rows[1]["carry_forward"] == pytest.approx(27.0)
+
+
+# ─── 3.8 Zuschläge (Befunde 7 und 8, Orakel-Stammdaten der Spec) ──────────────
+
+SUN_CHARGE = {"ID": 1, "NAME": "Sonntagstunden", "POSITION": 1, "START": 0, "END": 0,
+              "VALIDITY": 0, "VALIDDAYS": "0 0 0 0 0 0 1", "HOLRULE": 2, "HIDE": 0}
+NIGHT_CHARGE = {"ID": 3, "NAME": "Nachtstunden", "POSITION": 3, "START": 1200,
+                "END": 360, "VALIDITY": 0, "VALIDDAYS": "1 1 1 1 1 1 1",
+                "HOLRULE": 0, "HIDE": 0}
+# Bereitschaftsdienst: Fenster So 12:00-24:00, DURATION 4 (≠ Fensterlänge)
+STANDBY = {"ID": 7, "NAME": "Bereitschaft", "SHORTNAME": "B", "POSITION": 7,
+           "HIDE": 0, "NOEXTRA": 0, "STARTEND6": "12:00-24:00", "DURATION6": 4.0}
+
+
+def test_sunday_charge_window_intersection(tmp_path):
+    """Befunde 7+8: Sonntags-Maske aktiv, Fensterschnitt statt DURATION (12,0 statt 0/4)."""
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [STANDBY],
+        "5XCHAR": [SUN_CHARGE],
+        # So 7.12.2014
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 7, "DATE": "2014-12-07"}],
+    })
+    result = {r["charge_name"]: r for r in db.calculate_extracharge_hours(2014, 12)}
+    assert result["Sonntagstunden"]["hours"] == pytest.approx(12.0)
+
+
+def test_night_charge_crosses_midnight(tmp_path):
+    """Nachtschicht 22-06 ∩ Nachtfenster 20-06 = 8 h über zwei Kalendertage."""
+    night_shift = {"ID": 3, "NAME": "Nachtschicht", "SHORTNAME": "N", "POSITION": 3,
+                   "HIDE": 0, "NOEXTRA": 0}
+    for i in range(5):
+        night_shift[f"STARTEND{i}"] = "22:00-06:00"
+        night_shift[f"DURATION{i}"] = 8.0
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [night_shift],
+        "5XCHAR": [NIGHT_CHARGE],
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 3, "DATE": "2014-12-01"}],
+    })
+    result = {r["charge_name"]: r for r in db.calculate_extracharge_hours(2014, 12)}
+    assert result["Nachtstunden"]["hours"] == pytest.approx(8.0)
+
+
+def test_spshi_without_shiftid_uses_own_window(tmp_path):
+    """Befund 8 Nr. 7: 5SPSHI ohne SHIFTID zählt mit eigenem STARTEND-Fenster."""
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [],
+        "5XCHAR": [SUN_CHARGE],
+        # So 14.12.2014, eigenes Fenster 08:00-18:00
+        "5SPSHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 0, "DATE": "2014-12-14",
+                    "STARTEND": "08:00-18:00", "DURATION": 10.0, "NOEXTRA": 0,
+                    "TYPE": 0}],
+    })
+    result = {r["charge_name"]: r for r in db.calculate_extracharge_hours(2014, 12)}
+    assert result["Sonntagstunden"]["hours"] == pytest.approx(10.0)
