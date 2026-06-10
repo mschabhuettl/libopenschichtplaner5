@@ -1421,13 +1421,13 @@ class SP5Database:
             shift_names = {}
 
         def _get_shift_duration_hours(shift_id: int, weekday_index: int) -> float:
-            """Get shift duration in hours for a specific weekday (0=Mon/default, 1=Tue, ...)."""
+            """Get shift duration in hours for a specific weekday.
+
+            Tagindex nach Orakel-Daten (Spec 3.4.3 / Parity-Befund 2):
+            DURATION0=Montag … DURATION6=Sonntag, DURATION7=Feiertag.
+            """
             durations = shift_durations.get(shift_id, {})
-            # Try weekday-specific first, fall back to 0 (default/Monday)
-            dur = durations.get(weekday_index + 1, 0.0)  # DURATION1=Mon, etc.
-            if dur <= 0:
-                dur = durations.get(0, 0.0)  # DURATION0 = default
-            return dur
+            return durations.get(weekday_index, 0.0)
 
         def _get_iso_week_key(d: _date) -> tuple:
             """Return (year, week_number) for ISO week grouping."""
