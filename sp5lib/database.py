@@ -3,14 +3,16 @@ High-level database access for Schichtplaner5 .DBF files.
 """
 
 import calendar
+import dataclasses
 import json
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from . import _resource_paths as _paths
+from . import calculations as calc
 from .color_utils import bgr_to_hex, is_light_color
 from .dbf_reader import get_table_fields, read_dbf
 from .dbf_writer import append_record, delete_record, find_all_records, update_record
@@ -123,6 +125,119 @@ class SP5Database:
             if datetime(year, month, d).weekday() < 5
             and f"{year:04d}-{month:02d}-{d:02d}" not in hd
         )
+
+    # ── Berechnungsschicht-Adapter (sp5lib.calculations, Spec Kap. 3) ──
+    def _calc_holidays(self) -> dict[date, int]:
+        """5HOLID als date->INTERVAL-Kalender (0 = ganztägig, sonst halb)."""
+        return calc.holiday_calendar(self._read("HOLID"))
+
+    @staticmethod
+    def _calc_context(emp: dict) -> calc.EmployeeContext:
+        """5EMPL-Berechnungsparameter; ohne WORKDAYS-Maske gilt Mo-Fr."""
+        ctx = calc.EmployeeContext.from_record(emp)
+        if not str(emp.get("WORKDAYS") or "").strip():
+            ctx = dataclasses.replace(
+                ctx, workdays=(True, True, True, True, True, False, False, False)
+            )
+        return ctx
+
+    def _movement_by_employee(
+        self,
+        table: str,
+        von: date,
+        bis: date,
+        employee_id: int | None = None,
+    ) -> dict[int, list[dict]]:
+        """Bewegungsdaten (DATE-Spalte) je Mitarbeiter im Zeitraum [von, bis]."""
+        lo, hi = von.isoformat(), bis.isoformat()
+        out: dict[int, list[dict]] = {}
+        for r in self._read(table):
+            d = r.get("DATE") or ""
+            if not lo <= d <= hi:
+                continue
+            eid = r.get("EMPLOYEEID")
+            if eid is None or (employee_id is not None and eid != employee_id):
+                continue
+            out.setdefault(eid, []).append(r)
+        return out
+
+    def _cycle_shifts_by_employee(
+        self, von: date, bis: date, employee_id: int | None = None
+    ) -> dict[int, list[dict]]:
+        """Expandierte 5CYASS-Dienste je Mitarbeiter (Spec 3.4.2 Nr. 2).
+
+        Tage, an denen derselbe Mitarbeiter bereits einen 5MASHI-Eintrag hat,
+        werden übersprungen: die lib materialisiert Zyklen nach 5MASHI
+        (generate_schedule_from_cycle); der Schutz verhindert Doppelzählung
+        materialisierter Pläne.
+        """
+        assignments = []
+        for a in self._read("CYASS"):
+            if employee_id is not None and a.get("EMPLOYEEID") != employee_id:
+                continue
+            entrance = a.get("ENTRANCE")
+            if not isinstance(entrance, (int, float)):
+                a = dict(a, ENTRANCE=0)  # defensiv: Altbestand mit Datum im Feld
+            assignments.append(a)
+        if not assignments:
+            return {}
+        expanded = calc.expand_cycle_assignments(
+            assignments,
+            cycles=self._read("CYCLE"),
+            cycle_entries=self._read("CYENT"),
+            cycle_exceptions=self._read("CYEXC"),
+            von=von,
+            bis=bis,
+        )
+        mashi_days = {
+            (r.get("EMPLOYEEID"), (r.get("DATE") or "")[:10])
+            for r in self._read("MASHI")
+        }
+        out: dict[int, list[dict]] = {}
+        for rec in expanded:
+            if (rec["EMPLOYEEID"], rec["DATE"]) in mashi_days:
+                continue
+            out.setdefault(rec["EMPLOYEEID"], []).append(rec)
+        return out
+
+    def _calc_inputs(
+        self, von: date, bis: date, employee_id: int | None = None
+    ) -> dict:
+        """Gemeinsame Eingaben der Berechnungsschicht für [von, bis].
+
+        Plan-Quellen (5MASHI/5SPSHI/5CYASS) werden mit einem Tag Vorlauf
+        gelesen, damit Tageswechsel-Fenster des Vortags (Spec 3.4.3 Nr. 8)
+        in die Zuschlagsberechnung einfließen können.
+        """
+        margin = von - timedelta(days=1)
+        return {
+            "holidays": self._calc_holidays(),
+            "shifts_by_id": {s["ID"]: s for s in self.get_shifts(include_hidden=True)},
+            "leave_types_by_id": {
+                lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)
+            },
+            "manual": self._movement_by_employee("MASHI", margin, bis, employee_id),
+            "special": self._movement_by_employee("SPSHI", margin, bis, employee_id),
+            "cycle": self._cycle_shifts_by_employee(margin, bis, employee_id),
+            "absences": self._movement_by_employee("ABSEN", von, bis, employee_id),
+            "bookings": self._movement_by_employee("BOOK", von, bis, employee_id),
+            "overtimes": self._movement_by_employee("OVER", von, bis, employee_id),
+        }
+
+    @staticmethod
+    def _plan_kwargs(inputs: dict, employee_id: int) -> dict:
+        """Plan-Keyword-Argumente eines Mitarbeiters für die calc-Funktionen."""
+        return {
+            "holidays": inputs["holidays"],
+            "shifts_by_id": inputs["shifts_by_id"],
+            "manual_shifts": inputs["manual"].get(employee_id, ()),
+            "cycle_shifts": inputs["cycle"].get(employee_id, ()),
+            "special_shifts": inputs["special"].get(employee_id, ()),
+        }
+
+    @staticmethod
+    def _last_of_month(year: int, month: int) -> date:
+        return date(year, month, calendar.monthrange(year, month)[1])
 
     # ── Employees ──────────────────────────────────────────────
     def get_employees(self, include_hidden: bool = False) -> list[dict]:
@@ -1929,14 +2044,17 @@ class SP5Database:
     def get_statistics(
         self, year: int, month: int, group_id: int | None = None
     ) -> list[dict]:
-        """Return per-employee statistics for a month."""
+        """Return per-employee statistics for a month.
+
+        Ist-/Sollstunden folgen GetActualHours/GetNominalHours der
+        Berechnungsschicht (Spec 3.3/3.4): CALCBASE-Dispatcher, tagindex-
+        korrekte Schichtstunden, 5SPSHI-Ersetzung, expandierte 5CYASS,
+        Abwesenheits-Anrechnung (3.5) und 5BOOK-Konten (3.6).
+        """
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
             employees = [e for e in employees if e["ID"] in member_ids]
-
-        shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
-        lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
 
         # Build employee→primary group mapping (use get_all_group_members to avoid N+1)
         groups_all = self.get_groups()
@@ -1950,89 +2068,56 @@ class SP5Database:
                     emp_group[mid] = grp.get("NAME", "")
                     emp_group_id[mid] = gid
 
-        prefix = f"{year:04d}-{month:02d}"
-
-        # Public holidays for this month (used to reduce target hours)
-        holiday_dates = self.get_holiday_dates(year)
-
-        # Collect schedule data for the month
-        shift_hours: dict[int, float] = {}  # employee_id -> sum of shift hours
-        shifts_count: dict[int, int] = {}  # employee_id -> number of shift entries
-        absence_days: dict[int, int] = {}  # employee_id -> count of absences
-        vacation_used: dict[int, int] = {}  # employee_id -> count of vacation days
-        sick_days: dict[int, int] = {}  # employee_id -> count of sick days
-
-        # Pre-collect absence dates so shift hours on absence days are excluded
-        absence_date_set: set = set()  # (employee_id, date_str)
-        for r in self._read("ABSEN"):
-            d = r.get("DATE", "")
-            if d and d.startswith(prefix):
-                eid = r.get("EMPLOYEEID")
-                if eid:
-                    absence_date_set.add((eid, d[:10]))
-
-        for r in self._read("MASHI"):
-            d = r.get("DATE", "")
-            if d and d.startswith(prefix):
-                eid = r.get("EMPLOYEEID")
-                if eid and (eid, d[:10]) not in absence_date_set:
-                    sid = r.get("SHIFTID")
-                    hrs = 0.0
-                    if sid and sid in shifts_map:
-                        s = shifts_map[sid]
-                        # Use DURATION0 as default shift duration (hours)
-                        hrs = float(s.get("DURATION0", 0) or 0)
-                    shift_hours[eid] = shift_hours.get(eid, 0.0) + hrs
-                    shifts_count[eid] = shifts_count.get(eid, 0) + 1
-
-        for r in self._read("SPSHI"):
-            d = r.get("DATE", "")
-            if d and d.startswith(prefix):
-                eid = r.get("EMPLOYEEID")
-                if eid and (eid, d[:10]) not in absence_date_set:
-                    hrs = float(r.get("DURATION", 0) or 0)
-                    shift_hours[eid] = shift_hours.get(eid, 0.0) + hrs
-                    shifts_count[eid] = shifts_count.get(eid, 0) + 1
-
-        for r in self._read("ABSEN"):
-            d = r.get("DATE", "")
-            if d and d.startswith(prefix):
-                eid = r.get("EMPLOYEEID")
-                if eid:
-                    absence_days[eid] = absence_days.get(eid, 0) + 1
-                    ltid = r.get("LEAVETYPID")
-                    if ltid and ltid in lt_map:
-                        lt = lt_map[ltid]
-                        # Vacation: only ENTITLED=1 types count against leave quota
-                        # (CHARGETYP=1 alone, e.g. Krankheit, must NOT count as vacation)
-                        if lt.get("ENTITLED"):
-                            vacation_used[eid] = vacation_used.get(eid, 0) + 1
-                        # Sick: detect by name keyword
-                        lt_name = (lt.get("NAME", "") or "").lower()
-                        lt_short = (lt.get("SHORTNAME", "") or "").lower()
-                        if any(
-                            kw in lt_name or kw in lt_short
-                            for kw in ["krank", "sick", "ku"]
-                        ):
-                            sick_days[eid] = sick_days.get(eid, 0) + 1
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        inputs = self._calc_inputs(von, bis)
+        lt_map = inputs["leave_types_by_id"]
+        lo, hi = von.isoformat(), bis.isoformat()
 
         result = []
         for emp in employees:
             eid = emp["ID"]
-            # Target hours: prefer HRSMONTH, fallback to HRSDAY * working_days
-            # Use per-employee workdays and subtract public holidays
-            target = float(emp.get("HRSMONTH") or 0)
-            if target == 0:
-                emp_workdays = emp.get("WORKDAYS_LIST", [])
-                emp_working_days = self._count_working_days(
-                    year, month, workdays_list=emp_workdays, holiday_dates=holiday_dates
-                )
-                target = float(emp.get("HRSDAY") or 0) * emp_working_days
-            actual = shift_hours.get(eid, 0.0)
-            abs_days = absence_days.get(eid, 0)
-            vac = vacation_used.get(eid, 0)
-            sick = sick_days.get(eid, 0)
-            overtime = actual - target
+            ctx = self._calc_context(emp)
+            plan = self._plan_kwargs(inputs, eid)
+            absences = inputs["absences"].get(eid, [])
+            bookings = inputs["bookings"].get(eid, [])
+
+            target = calc.get_nominal_hours(
+                ctx, von, bis, holidays=inputs["holidays"], bookings=bookings
+            )
+            actual = calc.get_actual_hours(
+                ctx,
+                von,
+                bis,
+                absences=absences,
+                leave_types_by_id=lt_map,
+                bookings=bookings,
+                **plan,
+            )
+            shifts_count = sum(
+                1
+                for key in ("manual_shifts", "cycle_shifts", "special_shifts")
+                for r in plan[key]
+                if lo <= (r.get("DATE") or "") <= hi
+            )
+
+            abs_days = len(absences)
+            vac = sick = 0
+            for r in absences:
+                lt = lt_map.get(r.get("LEAVETYPID"))
+                if lt is None:
+                    continue
+                # Vacation: only ENTITLED=1 types count against leave quota
+                # (CHARGETYP=1 alone, e.g. Krankheit, must NOT count as vacation)
+                if lt.get("ENTITLED"):
+                    vac += 1
+                # Sick: detect by name keyword
+                lt_name = (lt.get("NAME", "") or "").lower()
+                lt_short = (lt.get("SHORTNAME", "") or "").lower()
+                if any(
+                    kw in lt_name or kw in lt_short for kw in ["krank", "sick", "ku"]
+                ):
+                    sick += 1
 
             result.append(
                 {
@@ -2045,9 +2130,9 @@ class SP5Database:
                     "group_id": emp_group_id.get(eid, None),
                     "target_hours": round(target, 2),
                     "actual_hours": round(actual, 2),
-                    "shifts_count": shifts_count.get(eid, 0),
+                    "shifts_count": shifts_count,
                     "absence_days": abs_days,
-                    "overtime_hours": round(overtime, 2),
+                    "overtime_hours": round(actual - target, 2),
                     "vacation_used": vac,
                     "sick_days": sick,
                 }
@@ -2057,9 +2142,19 @@ class SP5Database:
 
     # ── Year overview ─────────────────────────────────────────
     def get_schedule_year(self, year: int, employee_id: int) -> list[dict]:
-        """Return schedule summary per month for a given employee."""
+        """Return schedule summary per month for a given employee.
+
+        actual_hours = Arbeitszeit nach GetWorkHours (Spec 3.4.2/3.4.3:
+        tagindex-korrekte DURATION, 5SPSHI-Ersetzung, expandierte 5CYASS);
+        target_hours = GetNominalHours (Spec 3.3, CALCBASE-Dispatcher).
+        """
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
+
+        von = date(year, 1, 1)
+        bis = date(year, 12, 31)
+        inputs = self._calc_inputs(von, bis, employee_id)
+        plan = self._plan_kwargs(inputs, employee_id)
 
         # Collect all entries for this employee this year
         year_str = f"{year:04d}"
@@ -2075,39 +2170,32 @@ class SP5Database:
                 "label_counts": {},
             }
 
-        for r in self._read("MASHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if d and d.startswith(year_str):
+        for source in ("manual_shifts", "cycle_shifts"):
+            for r in plan[source]:
+                d = r.get("DATE", "")
+                if not d or not d.startswith(year_str):
+                    continue
                 m = int(d[5:7])
                 monthly[m]["shifts"] += 1
                 sid = r.get("SHIFTID")
                 if sid and sid in shifts_map:
-                    s = shifts_map[sid]
-                    hrs = float(s.get("DURATION0", 0) or 0)
-                    monthly[m]["actual_hours"] += hrs
-                    label = s.get("SHORTNAME", "?")
+                    label = shifts_map[sid].get("SHORTNAME", "?")
                     monthly[m]["label_counts"][label] = (
                         monthly[m]["label_counts"].get(label, 0) + 1
                     )
 
-        for r in self._read("SPSHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
+        for r in plan["special_shifts"]:
             d = r.get("DATE", "")
-            if d and d.startswith(year_str):
-                m = int(d[5:7])
-                monthly[m]["shifts"] += 1
-                monthly[m]["actual_hours"] += float(r.get("DURATION", 0) or 0)
-                label = r.get("SHORTNAME", "?")
-                monthly[m]["label_counts"][label] = (
-                    monthly[m]["label_counts"].get(label, 0) + 1
-                )
-
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
+            if not d or not d.startswith(year_str):
                 continue
+            m = int(d[5:7])
+            monthly[m]["shifts"] += 1
+            label = r.get("SHORTNAME", "?")
+            monthly[m]["label_counts"][label] = (
+                monthly[m]["label_counts"].get(label, 0) + 1
+            )
+
+        for r in inputs["absences"].get(employee_id, []):
             d = r.get("DATE", "")
             if d and d.startswith(year_str):
                 m = int(d[5:7])
@@ -2119,20 +2207,19 @@ class SP5Database:
                         monthly[m]["label_counts"].get(label, 0) + 1
                     )
 
-        # Fill target hours per month
+        # Fill target and actual hours per month via the calculation layer
         emp = self.get_employee(employee_id)
         if emp:
-            workdays_list = emp.get("WORKDAYS_LIST", [])
-            holiday_dates_yr = self.get_holiday_dates(year)
+            ctx = self._calc_context(emp)
             for m in range(1, 13):
-                working_days = self._count_working_days(
-                    year, m, workdays_list, holiday_dates=holiday_dates_yr
+                m_von = date(year, m, 1)
+                m_bis = self._last_of_month(year, m)
+                target = calc.get_nominal_hours(
+                    ctx, m_von, m_bis, holidays=inputs["holidays"]
                 )
-                target = float(emp.get("HRSMONTH") or 0)
-                if target == 0:
-                    target = float(emp.get("HRSDAY") or 0) * working_days
+                actual = calc.get_work_hours(ctx, m_von, m_bis, **plan)
                 monthly[m]["target_hours"] = round(target, 2)
-                monthly[m]["actual_hours"] = round(monthly[m]["actual_hours"], 2)
+                monthly[m]["actual_hours"] = round(actual, 2)
 
         return list(monthly.values())
 
@@ -3970,16 +4057,30 @@ class SP5Database:
         return 1
 
     # ── Carry Forward (Saldo-Übertrag) ────────────────────────
+    # Entscheidung (Spec 3.6): Das Original kennt KEINEN Stundenkonten-
+    # Jahresabschluss (3.6.2 Nr. 6); ein Saldo-Übertrag ins Folgejahr ist
+    # manuell als 5BOOK-Buchung TYPE 0/1 mit Datum im neuen Jahr abzubilden.
+    # 5BOOK TYPE=2 ist ausschließlich das Überstundenkonto des Schwester-
+    # produkts Win-Fehlzeiten (3.6.1/3.6.3) und fließt nie in Ist/Soll/Saldo.
+    # Die lib bildet den Übertrag daher als TYPE=0-Buchung (Iststundenkonto)
+    # am 1.1. des Jahres ab, erkennbar am NOTE-Präfix "Jahresübertrag".
+    _CARRY_FORWARD_NOTE = "Jahresübertrag"
+
     def get_carry_forward(self, employee_id: int, year: int) -> dict:
-        """Read carry-forward booking (TYPE=2) for employee+year from 5BOOK.DBF."""
-        year_str = str(year)
+        """Read the carry-forward booking for employee+year from 5BOOK.DBF.
+
+        Spec-konform ist der Übertrag eine TYPE=0-Buchung am 1.1. des Jahres
+        mit NOTE-Präfix "Jahresübertrag" (siehe Blockkommentar oben); sie
+        wirkt dadurch regulär über GetActualHours auf den Saldo.
+        """
+        target_date = f"{year}-01-01"
         for r in self._read("BOOK"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            if r.get("TYPE") != 2:
-                continue
-            d = r.get("DATE", "")
-            if d and d.startswith(year_str):
+            if (
+                r.get("EMPLOYEEID") == employee_id
+                and int(r.get("TYPE") or 0) == calc.BOOKING_ACTUAL
+                and r.get("DATE") == target_date
+                and str(r.get("NOTE") or "").startswith(self._CARRY_FORWARD_NOTE)
+            ):
                 return {
                     "employee_id": employee_id,
                     "year": year,
@@ -3994,22 +4095,32 @@ class SP5Database:
         }
 
     def set_carry_forward(self, employee_id: int, year: int, hours: float) -> dict:
-        """Set carry-forward for employee+year. Replaces any existing TYPE=2 entry for that year."""
+        """Set carry-forward for employee+year as a TYPE=0 booking on Jan 1.
+
+        Ersetzt eine vorhandene Übertrags-Buchung des Jahres; räumt dabei auch
+        Altbestände auf, die eine frühere lib-Version als TYPE=2 geschrieben
+        hat (erkennbar am NOTE-Präfix — fremde TYPE=2-Buchungen, d. h. echte
+        Überstundenkonto-Buchungen von Win-Fehlzeiten, bleiben unangetastet).
+        """
         filepath = self._table("BOOK")
         fields = get_table_fields(filepath)
         year_str = str(year)
-        # Find and delete existing TYPE=2 entries for this employee+year using raw index
+        # Delete existing carry-forward entries (TYPE=0 new style and TYPE=2
+        # legacy style, both identified by the NOTE marker) for this year.
         existing = read_dbf(filepath)
         for r in existing:
-            if r.get("EMPLOYEEID") == employee_id and r.get("TYPE") == 2:
-                d = r.get("DATE", "")
-                if d and d.startswith(year_str):
-                    rec_id = r.get("ID")
-                    if rec_id is not None:
-                        raw_idx, _ = self._find_record("BOOK", rec_id)
-                        if raw_idx is not None:
-                            delete_record(filepath, fields, raw_idx)
-        # Append new carry-forward
+            if r.get("EMPLOYEEID") != employee_id:
+                continue
+            if not str(r.get("NOTE") or "").startswith(self._CARRY_FORWARD_NOTE):
+                continue
+            d = r.get("DATE", "")
+            if d and d.startswith(year_str):
+                rec_id = r.get("ID")
+                if rec_id is not None:
+                    raw_idx, _ = self._find_record("BOOK", rec_id)
+                    if raw_idx is not None:
+                        delete_record(filepath, fields, raw_idx)
+        # Append new carry-forward (Iststundenkonto, Spec 3.6.2 Nr. 6)
         existing2 = read_dbf(filepath)
         max_id = max((r.get("ID", 0) or 0 for r in existing2), default=0)
         new_id = max_id + 1
@@ -4018,9 +4129,9 @@ class SP5Database:
             "ID": new_id,
             "EMPLOYEEID": employee_id,
             "DATE": date_str,
-            "TYPE": 2,
+            "TYPE": calc.BOOKING_ACTUAL,
             "VALUE": hours,
-            "NOTE": f"Jahresübertrag {year}",
+            "NOTE": f"{self._CARRY_FORWARD_NOTE} {year}",
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
@@ -4034,7 +4145,8 @@ class SP5Database:
     def calculate_annual_statement(self, employee_id: int, year: int) -> dict:
         """
         Calculate annual saldo and return carry-forward for next year.
-        saldo = actual_hours - target_hours + booking_adjustments (excl. TYPE=2)
+        saldo = total_saldo (Ist − Soll, Spec 3.6.2) ohne den bereits als
+        TYPE=0-Buchung enthaltenen Jahresübertrag (carry_in).
         """
         balance = self.calculate_time_balance(employee_id, year)
         if not balance:
@@ -4044,11 +4156,11 @@ class SP5Database:
                 "employee_id": employee_id,
                 "year": year,
             }
-        # Exclude existing carry-forward (TYPE=2) from calculation
+        # Exclude the existing carry-forward booking from the calculation
         cf = self.get_carry_forward(employee_id, year)
         carry_in = cf["hours"]
         total_saldo = balance.get("total_saldo", 0.0)
-        # Remove carry_in from saldo (it was already counted as booking_adjustment)
+        # Remove carry_in from saldo (it is part of the TYPE=0 actual bookings)
         net_saldo = round(total_saldo - carry_in, 2)
         return {
             "employee_id": employee_id,
@@ -4062,100 +4174,35 @@ class SP5Database:
 
     def calculate_time_balance(self, employee_id: int, year: int) -> dict:
         """
-        Calculate Soll vs Ist hours and overtime saldo for one employee for a full year.
-        Uses schedule data (MASHI/SPSHI), employee's target hours, and 5OVER adjustments.
+        Calculate Soll vs Ist hours and saldo for one employee for a full year.
+
+        Spec 3.3/3.4/3.6 über die Berechnungsschicht:
+        - actual_hours = GetActualHours (Arbeitszeit inkl. expandierter 5CYASS,
+          Abwesenheits-Anrechnung nach 3.5, Ist-Buchungen 5BOOK TYPE=0).
+        - target_hours = GetNominalHours (CALCBASE-Dispatcher, Soll-Buchungen
+          5BOOK TYPE=1).
+        - saldo = Ist − Soll (Spec 3.6.2); die Buchungstypen wirken bereits in
+          den Operanden, nicht als separater Zuschlag.
+        - 5OVER und 5BOOK TYPE=2 sind das Überstundenkonto (Spec 3.6.3) und
+          fließen NICHT in den Saldo; sie werden nur informativ als
+          overtime_adjustment (5OVER) / booking_adjustment (TYPE=2) und im
+          Jahreswert total_overtime_account (GetOvertimeHours) ausgewiesen.
         Returns monthly breakdown + totals.
         """
         emp = self.get_employee(employee_id)
         if not emp:
             return {}
 
-        shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
-        year_str = f"{year:04d}"
-        workdays_list = emp.get("WORKDAYS_LIST", [])
-        holiday_dates = self.get_holiday_dates(year)
+        ctx = self._calc_context(emp)
+        von = date(year, 1, 1)
+        bis = date(year, 12, 31)
+        inputs = self._calc_inputs(von, bis, employee_id)
+        plan = self._plan_kwargs(inputs, employee_id)
+        absences = inputs["absences"].get(employee_id, [])
+        bookings = inputs["bookings"].get(employee_id, [])
+        overtimes = inputs["overtimes"].get(employee_id, [])
+        lt_map = inputs["leave_types_by_id"]
 
-        monthly: dict[int, dict] = {}
-        for m in range(1, 13):
-            working_days = self._count_working_days(
-                year, m, workdays_list, holiday_dates=holiday_dates
-            )
-            target = float(emp.get("HRSMONTH") or 0)
-            if target == 0:
-                target = float(emp.get("HRSDAY") or 0) * working_days
-            monthly[m] = {
-                "month": m,
-                "target_hours": round(target, 2),
-                "actual_hours": 0.0,
-                "overtime_adjustment": 0.0,
-                "booking_adjustment": 0.0,
-                "absence_days": 0,
-            }
-
-        # Build set of absence dates for this employee to avoid counting
-        # planned shifts on sick/absence days as actual worked hours
-        absence_dates_tb: set = set()
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if d and d.startswith(year_str):
-                absence_dates_tb.add(d[:10])
-
-        # Collect actual hours from MASHI
-        for r in self._read("MASHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if not d or not d.startswith(year_str):
-                continue
-            # Skip: employee is absent on this day — don't count planned shift as worked
-            if d[:10] in absence_dates_tb:
-                continue
-            m = int(d[5:7])
-            sid = r.get("SHIFTID")
-            if sid and sid in shifts_map:
-                hrs = float(shifts_map[sid].get("DURATION0", 0) or 0)
-                monthly[m]["actual_hours"] += hrs
-
-        # Collect actual hours from SPSHI
-        for r in self._read("SPSHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if not d or not d.startswith(year_str):
-                continue
-            # Skip: employee is absent on this day
-            if d[:10] in absence_dates_tb:
-                continue
-            m = int(d[5:7])
-            monthly[m]["actual_hours"] += float(r.get("DURATION", 0) or 0)
-
-        # Collect absence days
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if not d or not d.startswith(year_str):
-                continue
-            m = int(d[5:7])
-            monthly[m]["absence_days"] += 1
-
-        # Overtime adjustments from 5OVER
-        for rec in self.get_overtime_records(year=year, employee_id=employee_id):
-            d = rec["date"]
-            if d:
-                m = int(d[5:7])
-                monthly[m]["overtime_adjustment"] += rec["hours"]
-
-        # Manual bookings from 5BOOK
-        for rec in self.get_bookings(year=year, employee_id=employee_id):
-            d = rec["date"]
-            if d:
-                m = int(d[5:7])
-                monthly[m]["booking_adjustment"] += rec["value"]
-
-        # Round and compute differences
         total_target = 0.0
         total_actual = 0.0
         total_overtime_adj = 0.0
@@ -4164,26 +4211,75 @@ class SP5Database:
         running_saldo = 0.0
 
         for m in range(1, 13):
-            mo = monthly[m]
-            mo["actual_hours"] = round(mo["actual_hours"], 2)
-            mo["overtime_adjustment"] = round(mo["overtime_adjustment"], 2)
-            mo["booking_adjustment"] = round(mo["booking_adjustment"], 2)
-            diff = mo["actual_hours"] - mo["target_hours"]
-            adj = mo["overtime_adjustment"] + mo["booking_adjustment"]
-            saldo_month = round(diff + adj, 2)
-            running_saldo += saldo_month
-            mo["difference"] = round(diff, 2)
-            mo["adjustment"] = round(adj, 2)
-            mo["saldo"] = round(saldo_month, 2)
-            mo["running_saldo"] = round(running_saldo, 2)
-            total_target += mo["target_hours"]
-            total_actual += mo["actual_hours"]
-            total_overtime_adj += mo["overtime_adjustment"]
-            total_booking_adj += mo["booking_adjustment"]
-            months_list.append(mo)
+            m_von = date(year, m, 1)
+            m_bis = self._last_of_month(year, m)
+            lo, hi = m_von.isoformat(), m_bis.isoformat()
+            target = round(
+                calc.get_nominal_hours(
+                    ctx, m_von, m_bis, holidays=inputs["holidays"], bookings=bookings
+                ),
+                2,
+            )
+            actual = round(
+                calc.get_actual_hours(
+                    ctx,
+                    m_von,
+                    m_bis,
+                    absences=absences,
+                    leave_types_by_id=lt_map,
+                    bookings=bookings,
+                    **plan,
+                ),
+                2,
+            )
+            overtime_adj = round(
+                sum(
+                    float(r.get("HOURS") or 0.0)
+                    for r in overtimes
+                    if lo <= (r.get("DATE") or "") <= hi
+                ),
+                2,
+            )
+            booking_adj = round(
+                calc.booking_sum(bookings, calc.BOOKING_OVERTIME, m_von, m_bis), 2
+            )
+            absence_days = sum(
+                1 for r in absences if lo <= (r.get("DATE") or "") <= hi
+            )
+
+            diff = round(actual - target, 2)
+            running_saldo += diff
+            months_list.append(
+                {
+                    "month": m,
+                    "target_hours": target,
+                    "actual_hours": actual,
+                    "overtime_adjustment": overtime_adj,
+                    "booking_adjustment": booking_adj,
+                    "absence_days": absence_days,
+                    "difference": diff,
+                    # Überstundenkonto-Bewegung des Monats (nicht im Saldo)
+                    "adjustment": round(overtime_adj + booking_adj, 2),
+                    "saldo": diff,
+                    "running_saldo": round(running_saldo, 2),
+                }
+            )
+            total_target += target
+            total_actual += actual
+            total_overtime_adj += overtime_adj
+            total_booking_adj += booking_adj
 
         total_diff = round(total_actual - total_target, 2)
-        total_saldo = round(total_diff + total_overtime_adj + total_booking_adj, 2)
+        overtime_account = calc.get_overtime_hours(
+            ctx,
+            von,
+            bis,
+            holidays=inputs["holidays"],
+            bookings=bookings,
+            overtimes=overtimes,
+            absences=absences,
+            leave_types_by_id=lt_map,
+        )
 
         return {
             "employee_id": employee_id,
@@ -4196,7 +4292,8 @@ class SP5Database:
             "total_actual_hours": round(total_actual, 2),
             "total_difference": total_diff,
             "total_adjustment": round(total_overtime_adj + total_booking_adj, 2),
-            "total_saldo": total_saldo,
+            "total_saldo": total_diff,
+            "total_overtime_account": round(overtime_account, 2),
             "months": months_list,
         }
 
@@ -4793,6 +4890,11 @@ class SP5Database:
         """
         Return detailed per-employee statistics for all 12 months of a year.
         Includes: soll_stunden, ist_stunden, weekend_shifts, night_shifts, vacation_days, absence_days.
+
+        Stundenwerte über die Berechnungsschicht (Spec 3.3/3.4/3.5): Ist =
+        GetActualHours (tagindex-korrekte DURATION, 5SPSHI-Ersetzung,
+        expandierte 5CYASS, Abwesenheits-Anrechnung, Ist-Buchungen), Soll =
+        GetNominalHours (CALCBASE-Dispatcher).
         """
         from datetime import date as _date
 
@@ -4804,22 +4906,34 @@ class SP5Database:
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
         entitled_ids = {lt_id for lt_id, lt in lt_map.items() if lt.get("ENTITLED")}
         year_str = f"{year:04d}"
-        workdays_list = emp.get("WORKDAYS_LIST", [])
-        holiday_dates = self.get_holiday_dates(year)
 
-        # Initialize monthly buckets
+        ctx = self._calc_context(emp)
+        inputs = self._calc_inputs(date(year, 1, 1), date(year, 12, 31), employee_id)
+        plan = self._plan_kwargs(inputs, employee_id)
+        absences = inputs["absences"].get(employee_id, [])
+        bookings = inputs["bookings"].get(employee_id, [])
+
+        # Initialize monthly buckets via the calculation layer
         monthly: dict[int, dict] = {}
         for m in range(1, 13):
-            working_days = self._count_working_days(
-                year, m, workdays_list, holiday_dates=holiday_dates
+            m_von = date(year, m, 1)
+            m_bis = self._last_of_month(year, m)
+            target = calc.get_nominal_hours(
+                ctx, m_von, m_bis, holidays=inputs["holidays"], bookings=bookings
             )
-            target = float(emp.get("HRSMONTH") or 0)
-            if target == 0:
-                target = float(emp.get("HRSDAY") or 0) * working_days
+            actual = calc.get_actual_hours(
+                ctx,
+                m_von,
+                m_bis,
+                absences=absences,
+                leave_types_by_id=lt_map,
+                bookings=bookings,
+                **plan,
+            )
             monthly[m] = {
                 "month": m,
                 "target_hours": round(target, 2),
-                "actual_hours": 0.0,
+                "actual_hours": round(actual, 2),
                 "weekend_shifts": 0,
                 "night_shifts": 0,
                 "vacation_days": 0,
@@ -4827,63 +4941,36 @@ class SP5Database:
                 "shifts_count": 0,
             }
 
-        # Build set of absence dates for this employee to avoid counting
-        # planned shifts on sick/absence days as actual worked hours
-        absence_dates: set = set()
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if d and d.startswith(year_str):
-                absence_dates.add(d[:10])
-
-        # Scan MASHI (regular schedule)
-        for r in self._read("MASHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
-            d = r.get("DATE", "")
-            if not d or not d.startswith(year_str):
-                continue
-            # Skip: employee is absent on this day — don't count planned shift as worked
-            if d[:10] in absence_dates:
-                continue
-            m = int(d[5:7])
-            try:
-                dt = _date.fromisoformat(d)
-                weekday = dt.weekday()
-            except ValueError:
-                continue
-
-            sid = r.get("SHIFTID")
-            shift = shifts_map.get(sid) if sid else None
-            if shift:
-                hrs = float(shift.get("DURATION0", 0) or 0)
-                monthly[m]["actual_hours"] += hrs
-                monthly[m]["shifts_count"] += 1
-                if weekday >= 5:  # Saturday=5, Sunday=6
-                    monthly[m]["weekend_shifts"] += 1
-                if self._is_night_shift(shift, weekday):
-                    monthly[m]["night_shifts"] += 1
+        # Scan duties (5MASHI + expandierte 5CYASS) for the counters
+        for source in ("manual_shifts", "cycle_shifts"):
+            for r in plan[source]:
+                d = r.get("DATE", "")
+                if not d or not d.startswith(year_str):
+                    continue
+                m = int(d[5:7])
+                try:
+                    weekday = _date.fromisoformat(d).weekday()
+                except ValueError:
+                    continue
+                sid = r.get("SHIFTID")
+                shift = shifts_map.get(sid) if sid else None
+                if shift:
+                    monthly[m]["shifts_count"] += 1
+                    if weekday >= 5:  # Saturday=5, Sunday=6
+                        monthly[m]["weekend_shifts"] += 1
+                    if self._is_night_shift(shift, weekday):
+                        monthly[m]["night_shifts"] += 1
 
         # Scan SPSHI (special shifts)
-        for r in self._read("SPSHI"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
+        for r in plan["special_shifts"]:
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
                 continue
-            # Skip: employee is absent on this day
-            if d[:10] in absence_dates:
-                continue
             m = int(d[5:7])
             try:
-                dt = _date.fromisoformat(d)
-                weekday = dt.weekday()
+                weekday = _date.fromisoformat(d).weekday()
             except ValueError:
                 continue
-
-            hrs = float(r.get("DURATION", 0) or 0)
-            monthly[m]["actual_hours"] += hrs
             monthly[m]["shifts_count"] += 1
             if weekday >= 5:
                 monthly[m]["weekend_shifts"] += 1
@@ -4894,9 +4981,7 @@ class SP5Database:
                     monthly[m]["night_shifts"] += 1
 
         # Scan ABSEN (absences)
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
-                continue
+        for r in absences:
             d = r.get("DATE", "")
             if not d or not d.startswith(year_str):
                 continue
