@@ -531,6 +531,74 @@ def update_record(
     _after_write(filepath, _parse_record(bytes(raw), fields), change=1)
 
 
+def _zap_journal(filepath: str) -> None:
+    """Zap the -L change journal of *filepath* (Spec D-74).
+
+    "Komprimieren" empties the journal over the whole number range and resets
+    the counter to 0; original clients detect this and do a full reload
+    (CHANGE=0 semantics). Missing -L file: nothing to do.
+    """
+    jpath = _journal_path(filepath)
+    if jpath is None:
+        return
+    _num, header_size, _record_size = _read_header_info(jpath)
+    with _exclusive_open(jpath) as f:
+        f.truncate(header_size)
+        f.seek(header_size)
+        f.write(b"\x1a")  # EOF marker directly after the header
+        _update_record_count(f, 0)
+        _stamp_header(f)
+    _invalidate_cdx(jpath)
+
+
+def pack_table(filepath: str) -> int:
+    """PACK *filepath*: physically remove deleted records (Spec 1.14/D-11).
+
+    Rewrites the record area without the records flagged ``0x2A``, updates
+    the header record count and date stamp and re-appends the EOF marker —
+    all under an exclusive lock. Afterwards the table's -L change journal is
+    zapped (counter reset to 0, Spec D-74) and the stale CDX files of the
+    main table and the journal are deleted (D-14), because record positions
+    have changed. If the table contains no deleted records, the file is left
+    untouched. Returns the number of physically removed records.
+    """
+    num_records, header_size, record_size = _read_header_info(filepath)
+    if record_size <= 0:
+        return 0
+
+    removed = 0
+    with _exclusive_open(filepath) as f:
+        # Re-read the count inside the lock (TOCTOU, cf. append_record)
+        f.seek(4)
+        num_records = struct.unpack("<I", f.read(4))[0]
+        f.seek(header_size)
+        records_area = f.read(num_records * record_size)
+        kept = []
+        for i in range(num_records):
+            rec = records_area[i * record_size : (i + 1) * record_size]
+            if len(rec) < record_size:
+                break  # truncated trailing record — drop it
+            if rec[0:1] == b"\x2a":
+                removed += 1
+            else:
+                kept.append(rec)
+        if removed == 0 and len(kept) == num_records:
+            return 0  # nothing to pack — keep file, journal and CDX intact
+
+        f.seek(header_size)
+        for rec in kept:
+            f.write(rec)
+        f.write(b"\x1a")  # EOF marker
+        f.truncate()
+        _update_record_count(f, len(kept))
+        _stamp_header(f)
+
+    if not _is_journal_file(filepath):
+        _zap_journal(filepath)
+    _invalidate_cdx(filepath)
+    return removed
+
+
 def find_all_records(
     filepath: str,
     fields: list[dict] | None = None,

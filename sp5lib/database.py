@@ -15,7 +15,16 @@ from . import _resource_paths as _paths
 from . import calculations as calc
 from .color_utils import bgr_to_hex, is_light_color
 from .dbf_reader import get_table_fields, read_dbf
-from .dbf_writer import append_record, delete_record, find_all_records, update_record
+from .dbf_writer import (
+    _read_header_info as _dbf_header_info,
+)
+from .dbf_writer import (
+    append_record,
+    delete_record,
+    find_all_records,
+    pack_table,
+    update_record,
+)
 
 _db_logger = logging.getLogger("sp5api")
 
@@ -5488,6 +5497,39 @@ class SP5Database:
             "vacation_days": mo["vacation_days"],
             "absence_days": mo["absence_days"],
             "shifts_count": mo["shifts_count"],
+        }
+
+    # ── Datenbank komprimieren (Spec 1.14) ─────────────────────
+    def compact_database(self) -> dict:
+        """PACK aller Tabellen: gelöschte Records physisch entfernen.
+
+        Delegiert je .DBF an dbf_writer.pack_table (Header-Count/EOF,
+        Journal-Zap nach Spec D-74, CDX-Invalidierung nach D-14) und
+        invalidiert anschließend den Lese-Cache dieser Datenbank.
+        """
+        results: list[dict] = []
+        total_removed = 0
+        for fname in sorted(os.listdir(self.db_path)):
+            if not fname.upper().endswith(".DBF"):
+                continue
+            fpath = os.path.join(self.db_path, fname)
+            try:
+                removed = pack_table(fpath)
+                active = _dbf_header_info(fpath)[0]
+            except Exception as exc:  # korrupte Datei: melden, weitermachen
+                results.append({"file": fname, "error": str(exc)})
+                continue
+            total_removed += removed
+            results.append({"file": fname, "removed": removed, "active": active})
+
+        with _CACHE_LOCK:
+            for key in [k for k in _GLOBAL_DBF_CACHE if k[0] == self.db_path]:
+                _GLOBAL_DBF_CACHE.pop(key, None)
+
+        return {
+            "files_processed": len(results),
+            "total_records_removed": total_removed,
+            "details": results,
         }
 
     # ── Stats ──────────────────────────────────────────────────

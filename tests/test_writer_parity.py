@@ -225,3 +225,99 @@ def test_text_field_utf16_byte_format(tmp_path):
     assert name_bytes.startswith(expected)
     assert name_bytes[len(expected) :] == b"\x20" * (40 - len(expected))
     assert read_dbf(path)[0]["NAME"] == "Müller"
+
+
+# ─── H-1: PACK (Spec 1.14 / D-11 / D-74) ──────────────────────────────────────
+
+
+def test_pack_table_removes_deleted_records(tmp_path):
+    path = _make_table(tmp_path, "5MASHI", MASHI_SPEC)
+    fields = get_table_fields(path)
+    for i in range(1, 4):
+        append_record(path, fields, {"ID": i, "EMPLOYEEID": 40 + i})
+    delete_record(path, fields, 1)  # ID=2 als gelöscht markieren
+
+    from sp5lib.dbf_writer import pack_table
+
+    cdx = tmp_path / "5MASHI.CDX"
+    cdx.write_bytes(b"stale")
+
+    removed = pack_table(str(path))
+    assert removed == 1
+
+    # Physisch entfernt: Header-Count 2, keine 0x2A-Records, EOF-Marker am Ende
+    data = open(path, "rb").read()
+    assert struct.unpack_from("<I", data, 4)[0] == 2
+    header_size = struct.unpack_from("<H", data, 8)[0]
+    record_size = struct.unpack_from("<H", data, 10)[0]
+    assert len(data) == header_size + 2 * record_size + 1
+    assert data[-1] == 0x1A
+    assert all(
+        data[header_size + i * record_size] != 0x2A for i in range(2)
+    )
+    assert [r["ID"] for r in read_dbf(str(path))] == [1, 3]
+
+    # D-14: CDX der Haupttabelle invalidiert
+    assert not cdx.exists()
+
+
+def test_pack_table_zaps_journal(tmp_path):
+    """Spec D-74: Komprimieren leert das -L-Journal (Zähler-Reset auf 0)."""
+    path = _make_table(tmp_path, "5MASHI", MASHI_SPEC)
+    jpath = tmp_path / "5MASHI-L.DBF"
+    fields = get_table_fields(path)
+    append_record(path, fields, {"ID": 1, "EMPLOYEEID": 40})
+    delete_record(path, fields, 0)
+    assert len(read_dbf(str(jpath))) == 2  # append + delete journalisiert
+    jcdx = tmp_path / "5MASHI-L.CDX"
+    jcdx.write_bytes(b"stale")
+
+    from sp5lib.dbf_writer import pack_table
+
+    pack_table(str(path))
+
+    jdata = open(jpath, "rb").read()
+    assert struct.unpack_from("<I", jdata, 4)[0] == 0  # Zap: 0 Records
+    assert read_dbf(str(jpath)) == []
+    assert jdata[-1] == 0x1A
+    assert not jcdx.exists()
+
+    # Zähler-Reset: nächster Journaleintrag beginnt wieder bei NUMBER=1
+    append_record(path, get_table_fields(path), {"ID": 9, "EMPLOYEEID": 41})
+    entries = read_dbf(str(jpath))
+    assert [e["NUMBER"] for e in entries] == [1]
+
+
+def test_pack_table_noop_without_deleted_records(tmp_path):
+    path = _make_table(tmp_path, "5MASHI", MASHI_SPEC)
+    fields = get_table_fields(path)
+    append_record(path, fields, {"ID": 1, "EMPLOYEEID": 40})
+    before = open(path, "rb").read()
+
+    from sp5lib.dbf_writer import pack_table
+
+    assert pack_table(str(path)) == 0
+    assert open(path, "rb").read() == before  # Datei unangetastet
+
+
+def test_compact_database_packs_all_tables(tmp_path):
+    from sp5lib.database import SP5Database
+    from sp5lib.dbf_reader import read_dbf as _read
+
+    path = _make_table(tmp_path, "5MASHI", MASHI_SPEC)
+    fields = get_table_fields(path)
+    for i in range(1, 4):
+        append_record(path, fields, {"ID": i, "EMPLOYEEID": 40})
+    delete_record(path, fields, 0)
+    delete_record(path, fields, 2)
+
+    db = SP5Database(str(tmp_path))
+    result = db.compact_database()
+
+    assert result["total_records_removed"] == 2
+    detail = next(d for d in result["details"] if d["file"] == "5MASHI.DBF")
+    assert detail["removed"] == 2
+    assert detail["active"] == 1
+    assert [r["ID"] for r in _read(str(path))] == [2]
+    # Fassaden-Cache invalidiert: _read liefert den gepackten Stand
+    assert len(db._read("MASHI")) == 1
