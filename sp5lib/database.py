@@ -3781,12 +3781,14 @@ class SP5Database:
 
     def calculate_extracharge_hours(
         self,
-        year: int,
-        month: int,
+        year: int | None = None,
+        month: int | None = None,
         employee_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> list[dict]:
         """
-        Calculate surcharge hours per ExtraCharge rule for a given month.
+        Calculate surcharge hours per ExtraCharge rule for a month or period.
         Returns a list of dicts: { charge_id, charge_name, hours, shift_count, ... }
 
         Spec 3.8 über die Berechnungsschicht: VALIDDAYS als Maske geparst,
@@ -3794,13 +3796,27 @@ class SP5Database:
         bis zu 3 Teilfenster, Tageswechsel-Split, VALIDITY=1, halbe Feiertage,
         NOEXTRA (bei 5SPSHI via SHIFTID-Weiche), expandierte 5CYASS.
         ``shift_count`` zählt Mitarbeiter-Tage mit Zuschlagsstunden > 0.
+
+        Auswertungszeitraum (Spec 3.9.1): entweder ``year``+``month`` oder ein
+        freier Zeitraum ``date_from``/``date_to`` (ISO-Datum, beide
+        erforderlich; hat Vorrang).
         """
         charges = self.get_extracharges(include_hidden=False)
         if not charges:
             return []
 
-        von = date(year, month, 1)
-        bis = self._last_of_month(year, month)
+        if date_from is not None and date_to is not None:
+            von = date.fromisoformat(str(date_from))
+            bis = date.fromisoformat(str(date_to))
+            if von > bis:
+                raise ValueError("date_from muss <= date_to sein")
+        elif year is None or month is None:
+            raise ValueError(
+                "Entweder year+month oder date_from+date_to angeben"
+            )
+        else:
+            von = date(year, month, 1)
+            bis = self._last_of_month(year, month)
         inputs = self._calc_inputs(von, bis, employee_id)
 
         employees = self.get_employees(include_hidden=True)
@@ -3988,6 +4004,7 @@ class SP5Database:
         ]
 
         total_entitlement = total_carry = used = 0.0
+        by_type = []
         for lt in self.get_leave_types(include_hidden=True):
             if not lt.get("ENTITLED"):
                 continue
@@ -4002,6 +4019,19 @@ class SP5Database:
             total_entitlement += acct.entitlement
             total_carry += acct.rest
             used += acct.taken
+            # Spec 3.9.3 Nr. 6: Doppelwert genommen/verbleibend je Art
+            by_type.append(
+                {
+                    "leave_type_id": lt["ID"],
+                    "leave_type_name": lt.get("NAME", ""),
+                    "leave_type_short": lt.get("SHORTNAME", ""),
+                    "entitlement": acct.entitlement,
+                    "carry_forward": acct.rest,
+                    "total": acct.total,
+                    "used": acct.taken,
+                    "remaining": acct.remaining,
+                }
+            )
 
         remaining = total_entitlement + total_carry - used
         forfeiture_date = f"{year}-12-31"
@@ -4014,6 +4044,7 @@ class SP5Database:
             "total": total_entitlement + total_carry,
             "used": used,
             "remaining": remaining,
+            "by_type": by_type,
             "forfeiture_date": forfeiture_date,
             "has_custom_entitlement": any(
                 r.get("YEAR") == year for r in leaen_rows

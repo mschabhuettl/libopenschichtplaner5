@@ -304,6 +304,12 @@ def test_leave_balance_per_type_and_half_days(tmp_path):
     assert bal["carry_forward"] == pytest.approx(2.0)
     assert bal["used"] == pytest.approx(2.5)  # 1 + 0,5 Urlaub + 1 Sonderurlaub
     assert bal["remaining"] == pytest.approx(31.5)
+    # Gap C-6 (Spec 3.9.3 Nr. 6): Aufschlüsselung je Art zusätzlich zur Summe
+    by_type = {t["leave_type_id"]: t for t in bal["by_type"]}
+    assert by_type[1]["used"] == pytest.approx(1.5)
+    assert by_type[1]["remaining"] == pytest.approx(30.5)  # 30 + 2 − 1,5
+    assert by_type[14]["used"] == pytest.approx(1.0)
+    assert by_type[14]["remaining"] == pytest.approx(1.0)
     # Ohne 5LEAEN-Satz: kein erfundener Default-Anspruch
     (tmp_path / "leer").mkdir()
     empty = _leave_db(tmp_path / "leer", [], [])
@@ -609,6 +615,15 @@ def test_sunday_charge_window_intersection(tmp_path):
     })
     result = {r["charge_name"]: r for r in db.calculate_extracharge_hours(2014, 12)}
     assert result["Sonntagstunden"]["hours"] == pytest.approx(12.0)
+    # Gap C-8 (Spec 3.9.1): freier Zeitraum statt Monatszwang
+    per = {r["charge_name"]: r for r in db.calculate_extracharge_hours(
+        date_from="2014-12-01", date_to="2014-12-31")}
+    assert per == result
+    narrow = {r["charge_name"]: r for r in db.calculate_extracharge_hours(
+        date_from="2014-12-08", date_to="2014-12-14")}
+    assert narrow["Sonntagstunden"]["hours"] == pytest.approx(0.0)  # So 7.12. außerhalb
+    with pytest.raises(ValueError):
+        db.calculate_extracharge_hours(date_from="2014-12-31", date_to="2014-12-01")
 
 
 def test_night_charge_crosses_midnight(tmp_path):
