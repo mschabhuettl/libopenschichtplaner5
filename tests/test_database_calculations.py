@@ -83,6 +83,15 @@ SPECS = {
                ("SHIFTID", "N", 11), ("WORKPLACID", "N", 11)],
     "5CYASS": [("ID", "N", 11), ("EMPLOYEEID", "N", 11), ("CYCLEID", "N", 11),
                ("START", "D", 8), ("END", "D", 8), ("ENTRANCE", "N", 11)],
+    "5GROUP": [("ID", "N", 11), ("NAME", "C", 40), ("SHORTNAME", "C", 12),
+               ("POSITION", "N", 11), ("HIDE", "N", 1)],
+    "5GRASG": [("ID", "N", 11), ("EMPLOYEEID", "N", 11), ("GROUPID", "N", 11)],
+    "5SHDEM": [("ID", "N", 11), ("GROUPID", "N", 11), ("WEEKDAY", "N", 5),
+               ("SHIFTID", "N", 11), ("WORKPLACID", "N", 11), ("MIN", "N", 5),
+               ("MAX", "N", 5)],
+    "5SPDEM": [("ID", "N", 11), ("GROUPID", "N", 11), ("DATE", "D", 8),
+               ("SHIFTID", "N", 11), ("WORKPLACID", "N", 11), ("MIN", "N", 5),
+               ("MAX", "N", 5)],
 }
 
 
@@ -376,6 +385,55 @@ def test_forfeit_rest_cuts_to_consumption(tmp_path):
     again = db.forfeit_rest("2014-03-31")
     assert again["cuts"] == []
     assert again["total_forfeited"] == pytest.approx(0.0)
+
+
+# ─── 3.9.4 Personalauslastung (Gap C-4) ───────────────────────────────────────
+
+
+def test_utilization_against_demand(tmp_path):
+    """Spec 3.9.4 Nr. 8/9: ist<min ⇒ under, ist>max ⇒ over, sonst ok;
+    Tage/Zellen ohne Bedarf ⇒ none; 5SPDEM überschreibt den Wochenbedarf."""
+    emp2 = dict(EMP_WEEK, ID=2, NAME="Zweit", SHORTNAME="Z2")
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK, emp2],
+        "5SHIFT": [DAY_SHIFT],
+        "5GROUP": [{"ID": 1, "NAME": "Team", "SHORTNAME": "T", "POSITION": 1, "HIDE": 0}],
+        "5GRASG": [{"ID": 1, "EMPLOYEEID": 1, "GROUPID": 1},
+                   {"ID": 2, "EMPLOYEEID": 2, "GROUPID": 1}],
+        # Wochenbedarf: Mo (Tagindex 0) min 2 / max 2 für Schicht 1
+        "5SHDEM": [{"ID": 1, "GROUPID": 1, "WEEKDAY": 0, "SHIFTID": 1,
+                    "WORKPLACID": 0, "MIN": 2, "MAX": 2}],
+        # Tagesbedarf Mo 8.12.: min 1 / max 1 (überschreibt Wochenbedarf)
+        "5SPDEM": [{"ID": 1, "GROUPID": 1, "DATE": "2014-12-08", "SHIFTID": 1,
+                    "WORKPLACID": 0, "MIN": 1, "MAX": 1}],
+        "5MASHI": [
+            # Mo 1.12.: nur MA 1 eingeteilt → 1 < min 2 ⇒ under
+            {"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-01"},
+            # Mo 8.12.: beide eingeteilt, SPDEM max 1 ⇒ over
+            {"ID": 2, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-08"},
+            {"ID": 3, "EMPLOYEEID": 2, "SHIFTID": 1, "DATE": "2014-12-08"},
+            # Mo 15.12.: beide eingeteilt → min 2 erfüllt ⇒ ok
+            {"ID": 4, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-15"},
+            {"ID": 5, "EMPLOYEEID": 2, "SHIFTID": 1, "DATE": "2014-12-15"},
+        ],
+    })
+    days = {r["day"]: r for r in db.get_utilization(2014, 12)}
+
+    assert days[1]["status"] == "under"
+    assert days[1]["cells"][0]["assigned"] == 1
+    assert days[1]["required_count"] == 2
+
+    assert days[8]["status"] == "over"
+    assert days[8]["cells"][0]["source"] == "SPDEM"
+    assert days[8]["required_count"] == 1
+
+    assert days[15]["status"] == "ok"
+    assert days[15]["scheduled_count"] == 2
+
+    # Di 2.12.: kein Bedarf definiert ⇒ none, required None (kein erfundenes 3)
+    assert days[2]["status"] == "none"
+    assert days[2]["required_count"] is None
+    assert days[2]["cells"] == []
 
 
 # ─── 3.8 Zuschläge (Befunde 7 und 8, Orakel-Stammdaten der Spec) ──────────────

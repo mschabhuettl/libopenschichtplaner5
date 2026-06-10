@@ -1750,6 +1750,144 @@ class SP5Database:
         rows = self._read("SHDEM")
         return rows
 
+    def get_utilization(
+        self, year: int, month: int, group_id: int | None = None
+    ) -> list[dict]:
+        """Personalauslastung gegen den Bedarf (Spec 3.9.4).
+
+        Je Tag des Monats werden alle Bedarfszellen (Gruppe × Schichtart) aus
+        5SHDEM geprüft (Wochenbedarf je Tagindex 0..7, Feiertag = 7 über
+        calc.day_index); ein 5SPDEM-Satz (Tagesbedarf) überschreibt den
+        Wochenbedarf seiner Zelle an seinem Datum. Eingeteilt zählt je
+        Mitarbeiter höchstens einmal (calc.count_assigned über 5MASHI +
+        expandierte 5CYASS + 5SPSHI mit SHIFTID). Zellstatus nach
+        calc.utilization_status: ist<min ⇒ "under", ist>max ⇒ "over", sonst
+        "ok"; Tage ohne definierten Bedarf erhalten den Status "none".
+        """
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        holidays = self._calc_holidays()
+
+        members_by_group = self.get_all_group_members()
+        group_ids = (
+            [group_id] if group_id is not None else sorted(members_by_group.keys())
+        )
+
+        shdem_by_group: dict[int, list[dict]] = {}
+        shifts_by_group: dict[int, set[int]] = {}
+        for r in self._read("SHDEM"):
+            gid = r.get("GROUPID") or 0
+            shdem_by_group.setdefault(gid, []).append(r)
+            sid = int(r.get("SHIFTID") or 0)
+            if sid:
+                shifts_by_group.setdefault(gid, set()).add(sid)
+
+        spdem_by_cell: dict[tuple[int, str, int], dict] = {}
+        for r in self._read("SPDEM"):
+            gid = r.get("GROUPID") or 0
+            sid = int(r.get("SHIFTID") or 0)
+            d = r.get("DATE") or ""
+            if sid and d:
+                spdem_by_cell[(gid, d, sid)] = r
+
+        manual = self._movement_by_employee("MASHI", von, bis)
+        special = self._movement_by_employee("SPSHI", von, bis)
+        cycle = self._cycle_shifts_by_employee(von, bis)
+        entries_by_emp: dict[int, list[dict]] = {}
+        for src in (manual, cycle, special):
+            for eid, recs in src.items():
+                entries_by_emp.setdefault(eid, []).extend(recs)
+
+        member_entries_by_group = {
+            gid: {
+                eid: entries_by_emp.get(eid, ())
+                for eid in members_by_group.get(gid, [])
+            }
+            for gid in group_ids
+        }
+        allowed_ids = (
+            set(members_by_group.get(group_id, [])) if group_id is not None else None
+        )
+
+        # Tageszählung wie bisher: eingeteilte MA (5MASHI + 5CYASS + 5SPSHI TYPE=0)
+        scheduled_by_day: dict[str, set[int]] = {}
+        for eid, recs in manual.items():
+            for r in recs:
+                scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+        for eid, recs in cycle.items():
+            for r in recs:
+                scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+        for eid, recs in special.items():
+            for r in recs:
+                if int(r.get("TYPE") or 0) == 0:
+                    scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+
+        result = []
+        num_days = calendar.monthrange(year, month)[1]
+        for day in range(1, num_days + 1):
+            d = date(year, month, day)
+            iso = d.isoformat()
+            cells = []
+            for gid in group_ids:
+                demands = shdem_by_group.get(gid, [])
+                member_entries = member_entries_by_group.get(gid, {})
+                shift_ids = set(shifts_by_group.get(gid, set()))
+                shift_ids.update(
+                    sid for (g, dd, sid) in spdem_by_cell if g == gid and dd == iso
+                )
+                for sid in sorted(shift_ids):
+                    spdem = spdem_by_cell.get((gid, iso, sid))
+                    if spdem is not None:
+                        mn, mx = int(spdem.get("MIN") or 0), int(spdem.get("MAX") or 0)
+                        source = "SPDEM"
+                    else:
+                        demand = calc.demand_for_day(
+                            demands, d, holidays=holidays, shift_id=sid
+                        )
+                        if demand is None:
+                            continue
+                        mn, mx = demand
+                        source = "SHDEM"
+                    assigned = calc.count_assigned(member_entries, d, [sid])
+                    st = calc.utilization_status(assigned, mn, mx)
+                    cells.append(
+                        {
+                            "group_id": gid,
+                            "shift_id": sid,
+                            "min": mn,
+                            "max": mx,
+                            "assigned": assigned,
+                            "status": {-1: "under", 0: "ok", 1: "over"}[st],
+                            "source": source,
+                        }
+                    )
+
+            if any(c["status"] == "under" for c in cells):
+                status = "under"
+            elif any(c["status"] == "over" for c in cells):
+                status = "over"
+            elif cells:
+                status = "ok"
+            else:
+                status = "none"
+
+            scheduled = scheduled_by_day.get(iso, set())
+            if allowed_ids is not None:
+                scheduled = scheduled & allowed_ids
+            result.append(
+                {
+                    "day": day,
+                    "date": iso,
+                    "scheduled_count": len(scheduled),
+                    "required_count": sum(c["min"] for c in cells) if cells else None,
+                    "required_min": sum(c["min"] for c in cells) if cells else None,
+                    "required_max": sum(c["max"] for c in cells) if cells else None,
+                    "status": status,
+                    "cells": cells,
+                }
+            )
+        return result
+
     # ── Write: SPSHI entries (Einsatzplan) ───────────────────
     def add_spshi_entry(
         self,
