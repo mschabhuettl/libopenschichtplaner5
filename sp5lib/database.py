@@ -3920,6 +3920,103 @@ class SP5Database:
             "details": details,
         }
 
+    def forfeit_rest(
+        self,
+        cutoff_date: str,
+        group_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Resturlaub zum Stichtag verfallen lassen (Spec 3.7.3 / Dialog 5.17).
+
+        Je Mitarbeiter und anspruchsverbundener Art (ENTITLED=1) wird REST des
+        Stichtagsjahres auf den Verbrauch bis einschließlich Stichtag gekürzt
+        (calculations.forfeit_rest: nur kürzen, nie erhöhen; ENTITLEMNT bleibt
+        unberührt). ``dry_run=True`` liefert die Kürzungen als Vorschau, ohne
+        5LEAEN zu schreiben; sonst werden die betroffenen 5LEAEN-Sätze über
+        den dbf_writer aktualisiert (Journal/CDX automatisch).
+        """
+        cutoff = date.fromisoformat(str(cutoff_date))
+        year = cutoff.year
+
+        employees = self.get_employees(include_hidden=False)
+        if group_id is not None:
+            member_ids = set(self.get_group_members(group_id))
+            employees = [e for e in employees if e["ID"] in member_ids]
+
+        holidays = self._calc_holidays()
+        leave_types = self.get_leave_types(include_hidden=True)
+        lt_map = {lt["ID"]: lt for lt in leave_types}
+        leaen_by_emp: dict[int, list[dict]] = {}
+        for r in self._read("LEAEN"):
+            leaen_by_emp.setdefault(r.get("EMPLOYEEID"), []).append(r)
+        absen_by_emp: dict[int, list[dict]] = {}
+        for r in self._read("ABSEN"):
+            absen_by_emp.setdefault(r.get("EMPLOYEEID"), []).append(r)
+
+        filepath = self._table("LEAEN")
+        fields = get_table_fields(filepath) if not dry_run else None
+
+        cuts = []
+        total_forfeited = 0.0
+        for emp in employees:
+            eid = emp["ID"]
+            ctx = self._calc_context(emp)
+            leaen_rows = leaen_by_emp.get(eid, [])
+            rows = calc.forfeit_rest(
+                ctx,
+                cutoff,
+                holidays=holidays,
+                leave_types=leave_types,
+                entitlements=leaen_rows,
+                absences=absen_by_emp.get(eid, []),
+            )
+            for row in rows:
+                lt_id = int(row["LEAVETYPID"])
+                old_rest = next(
+                    (
+                        float(r.get("REST") or 0.0)
+                        for r in leaen_rows
+                        if r.get("YEAR") == year and r.get("LEAVETYPID") == lt_id
+                    ),
+                    0.0,
+                )
+                new_rest = float(row["REST"])
+                if not dry_run:
+                    matches = find_all_records(
+                        filepath, fields, EMPLOYEEID=eid, YEAR=year, LEAVETYPID=lt_id
+                    )
+                    for raw_idx, _rec in matches:
+                        update_record(filepath, fields, raw_idx, {"REST": new_rest})
+                lt = lt_map.get(lt_id)
+                total_forfeited += old_rest - new_rest
+                cuts.append(
+                    {
+                        "employee_id": eid,
+                        "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                            ", "
+                        ),
+                        "leave_type_id": lt_id,
+                        "leave_type_name": lt.get("NAME", "") if lt else "",
+                        "year": year,
+                        "old_rest": old_rest,
+                        "new_rest": new_rest,
+                        "forfeited": round(old_rest - new_rest, 4),
+                    }
+                )
+
+        if not dry_run and cuts:
+            self._invalidate_cache("LEAEN")
+
+        return {
+            "cutoff_date": cutoff.isoformat(),
+            "year": year,
+            "group_id": group_id,
+            "dry_run": dry_run,
+            "employees_processed": len(employees),
+            "cuts": cuts,
+            "total_forfeited": round(total_forfeited, 4),
+        }
+
     # ── Zeitkonto / Überstunden ───────────────────────────────
 
     def get_overtime_records(

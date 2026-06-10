@@ -337,6 +337,47 @@ def test_annual_close_per_type_no_cap(tmp_path):
     assert rows[1]["carry_forward"] == pytest.approx(27.0)
 
 
+def test_forfeit_rest_cuts_to_consumption(tmp_path):
+    """Spec 3.7.3 Nr. 8 (Gap A-3): REST wird auf den Verbrauch bis zum Stichtag
+    gekürzt, nie erhöht; ENTITLEMNT bleibt unberührt; dry_run schreibt nicht."""
+    absen = [
+        {"ID": 1, "EMPLOYEEID": 1, "DATE": "2014-02-10", "LEAVETYPID": 1,
+         "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0},  # 1 Tag vor Stichtag
+        {"ID": 2, "EMPLOYEEID": 1, "DATE": "2014-06-02", "LEAVETYPID": 1,
+         "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0},  # nach Stichtag
+    ]
+    leaen = [
+        {"ID": 1, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 1,
+         "ENTITLEMNT": 30.0, "REST": 5.0, "INDAYS": 1},
+        {"ID": 2, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 14,
+         "ENTITLEMNT": 2.0, "REST": 0.0, "INDAYS": 1},  # REST 0 → keine Kürzung
+    ]
+    db = _leave_db(tmp_path, absen, leaen)
+
+    # Vorschau: Kürzung 5 → 1 (Verbrauch bis 31.3.), kein Schreiben
+    preview = db.forfeit_rest("2014-03-31", dry_run=True)
+    assert preview["dry_run"] is True
+    assert len(preview["cuts"]) == 1
+    cut = preview["cuts"][0]
+    assert (cut["leave_type_id"], cut["old_rest"], cut["new_rest"]) == (1, 5.0, 1.0)
+    assert preview["total_forfeited"] == pytest.approx(4.0)
+    rows = {r["leave_type_id"]: r for r in db.get_leave_entitlements(year=2014, employee_id=1)}
+    assert rows[1]["carry_forward"] == pytest.approx(5.0)  # unverändert
+
+    # Produktiv: 5LEAEN.REST wird gekürzt, ENTITLEMNT bleibt
+    result = db.forfeit_rest("2014-03-31")
+    assert result["total_forfeited"] == pytest.approx(4.0)
+    rows = {r["leave_type_id"]: r for r in db.get_leave_entitlements(year=2014, employee_id=1)}
+    assert rows[1]["carry_forward"] == pytest.approx(1.0)
+    assert rows[1]["entitlement"] == pytest.approx(30.0)
+    assert rows[14]["carry_forward"] == pytest.approx(0.0)
+
+    # Idempotent: zweiter Lauf kürzt nichts mehr (REST == Verbrauch)
+    again = db.forfeit_rest("2014-03-31")
+    assert again["cuts"] == []
+    assert again["total_forfeited"] == pytest.approx(0.0)
+
+
 # ─── 3.8 Zuschläge (Befunde 7 und 8, Orakel-Stammdaten der Spec) ──────────────
 
 SUN_CHARGE = {"ID": 1, "NAME": "Sonntagstunden", "POSITION": 1, "START": 0, "END": 0,
