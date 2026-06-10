@@ -387,6 +387,71 @@ def test_forfeit_rest_cuts_to_consumption(tmp_path):
     assert again["total_forfeited"] == pytest.approx(0.0)
 
 
+# ─── 6.3/4.2 Zyklusdienste im Plan-Lesepfad (Gap B-2) ─────────────────────────
+
+
+def _cycle_db(tmp_path, extra=None):
+    """1-Wochen-Zyklus Mo-Fr Tagschicht ab 1.12.2014 für MA 1."""
+    cycle = {"ID": 8, "NAME": "1-Woche", "POSITION": 1, "SIZE": 1, "UNIT": 1, "HIDE": 0}
+    entries = [{"ID": i + 1, "CYCLEEID": 8, "INDEX": i, "SHIFTID": 1, "WORKPLACID": 0}
+               for i in range(5)]
+    tables = {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [DAY_SHIFT],
+        "5CYCLE": [cycle],
+        "5CYENT": entries,
+        "5CYASS": [{"ID": 1, "EMPLOYEEID": 1, "CYCLEID": 8,
+                    "START": "2014-12-01", "ENTRANCE": 0}],
+    }
+    tables.update(extra or {})
+    return make_db(tmp_path, tables)
+
+
+def test_schedule_read_paths_expand_cycles(tmp_path):
+    """Spec 6.3/4.2: Zyklusdienste erscheinen ohne Materialisierung im Plan;
+    materialisierte 5MASHI-Tage gewinnen, generierte Einträge tragen
+    source='cycle'."""
+    db = _cycle_db(tmp_path, {
+        # Mo 1.12. ist materialisiert → kein Zyklus-Duplikat
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-01"}],
+        # Mi 3.12.: Arbeitszeitabweichung (SHIFTID gesetzt) ersetzt den Zyklusdienst
+        "5SPSHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2014-12-03",
+                    "STARTEND": "06:00-12:00", "DURATION": 6.0, "NOEXTRA": 0,
+                    "TYPE": 1}],
+    })
+
+    entries = db.get_schedule(2014, 12)
+    by_date: dict = {}
+    for e in entries:
+        by_date.setdefault(e["date"], []).append(e)
+    # Mo 1.12.: genau ein Eintrag (5MASHI), kein Zyklus-Duplikat
+    assert len(by_date["2014-12-01"]) == 1
+    assert by_date["2014-12-01"][0].get("source") is None
+    # Di 2.12.: generierter Zykluseintrag
+    di = [e for e in by_date["2014-12-02"] if e["kind"] == "shift"]
+    assert len(di) == 1 and di[0]["source"] == "cycle" and di[0]["shift_id"] == 1
+    # Mi 3.12.: Abweichung ersetzt den Zyklusdienst (nur special_shift)
+    assert [e["kind"] for e in by_date["2014-12-03"]] == ["special_shift"]
+    # Sa 6.12.: zyklusfreier Tag → kein Eintrag
+    assert "2014-12-06" not in by_date
+
+    # Tagesansicht: Di 2.12. zeigt den Zyklusdienst
+    day = {r["employee_id"]: r for r in db.get_schedule_day("2014-12-02")}
+    assert day[1]["kind"] == "shift" and day[1]["source"] == "cycle"
+    assert day[1]["shift_id"] == 1
+    # Tagesansicht: Mo 1.12. zeigt den materialisierten Dienst (kein cycle)
+    day = {r["employee_id"]: r for r in db.get_schedule_day("2014-12-01")}
+    assert day[1]["kind"] == "shift" and day[1]["source"] is None
+
+    # Wochenansicht: Mo materialisiert, Di-Fr aus dem Zyklus
+    week = db.get_schedule_week("2014-12-01")
+    by_day = {d["date"]: d["entries"][0] for d in week["days"]}
+    assert by_day["2014-12-01"]["source"] is None
+    assert by_day["2014-12-02"]["source"] == "cycle"
+    assert by_day["2014-12-05"]["shift_id"] == 1
+    assert by_day["2014-12-06"]["kind"] is None  # Sa frei
+
+
 # ─── 3.9.1 Freier Auswertungszeitraum (Gap C-1) ───────────────────────────────
 
 

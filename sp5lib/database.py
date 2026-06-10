@@ -387,6 +387,11 @@ class SP5Database:
         Get schedule entries for a month.
         Returns list of {employee_id, date, type, shift_id, leave_type_id,
                           shift_name, shift_short, color_bk, color_text, workplace_id, ...}
+
+        Unmaterialisierte Zyklusdienste (5CYASS, Spec 6.3/4.2) erscheinen als
+        generierte Einträge mit ``"source": "cycle"``; materialisierte
+        5MASHI-Tage und 5SPSHI-Arbeitszeitabweichungen (SHIFTID gesetzt,
+        Spec 3.4.4 Nr. 12) gewinnen.
         """
         prefix = f"{year:04d}-{month:02d}"
         entries = []
@@ -400,6 +405,30 @@ class SP5Database:
                         "employee_id": r.get("EMPLOYEEID"),
                         "date": d,
                         "kind": "shift",
+                        "shift_id": r.get("SHIFTID"),
+                        "workplace_id": r.get("WORKPLACID"),
+                        "leave_type_id": None,
+                    }
+                )
+
+        # Expand unmaterialised cycle duties (5CYASS); 5MASHI days win
+        replaced_by_spshi = {
+            (r.get("EMPLOYEEID"), r.get("DATE"))
+            for r in self._read("SPSHI")
+            if int(r.get("SHIFTID") or 0)
+        }
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        for eid, recs in self._cycle_shifts_by_employee(von, bis).items():
+            for r in recs:
+                if (eid, r["DATE"]) in replaced_by_spshi:
+                    continue
+                entries.append(
+                    {
+                        "employee_id": eid,
+                        "date": r["DATE"],
+                        "kind": "shift",
+                        "source": "cycle",
                         "shift_id": r.get("SHIFTID"),
                         "workplace_id": r.get("WORKPLACID"),
                         "leave_type_id": None,
@@ -2034,6 +2063,19 @@ class SP5Database:
         # Build assignment lookup for the day
         day_entries: dict[int, dict] = {}
 
+        # Unmaterialisierte Zyklusdienste (5CYASS, Spec 6.3/4.2) als Basis —
+        # 5MASHI/5SPSHI/5ABSEN überschreiben sie in den folgenden Schleifen.
+        day_date = date.fromisoformat(date_str)
+        for eid, recs in self._cycle_shifts_by_employee(day_date, day_date).items():
+            for r in recs:
+                day_entries[eid] = {
+                    "kind": "shift",
+                    "source": "cycle",
+                    "shift_id": r.get("SHIFTID"),
+                    "workplace_id": r.get("WORKPLACID"),
+                    "leave_type_id": None,
+                }
+
         for r in self._read("MASHI"):
             if r.get("DATE") == date_str:
                 eid = r.get("EMPLOYEEID")
@@ -2136,6 +2178,7 @@ class SP5Database:
                     "workplace_id": workplace_id,
                     "workplace_name": wp_name,
                     "kind": kind,
+                    "source": entry.get("source"),
                     "leave_name": leave_name,
                     "display_name": display_name,
                     "spshi_id": entry.get("spshi_id"),
@@ -2508,6 +2551,24 @@ class SP5Database:
         # Build lookup: date -> employee_id -> entry
         day_entries: dict[str, dict[Any, dict]] = {d: {} for d in week_dates}
 
+        # Unmaterialisierte Zyklusdienste (5CYASS, Spec 6.3/4.2) als Basis —
+        # 5MASHI/5SPSHI/5ABSEN überschreiben sie in den folgenden Schleifen.
+        week_von = date.fromisoformat(week_dates[0])
+        week_bis = date.fromisoformat(week_dates[6])
+        for eid, recs in self._cycle_shifts_by_employee(week_von, week_bis).items():
+            if eid not in allowed_ids:
+                continue
+            for r in recs:
+                d = r.get("DATE", "")
+                if d in week_set:
+                    day_entries[d][eid] = {
+                        "kind": "shift",
+                        "source": "cycle",
+                        "shift_id": r.get("SHIFTID"),
+                        "workplace_id": r.get("WORKPLACID"),
+                        "leave_type_id": None,
+                    }
+
         for r in self._read("MASHI"):
             d = r.get("DATE", "")
             if d in week_set:
@@ -2610,6 +2671,7 @@ class SP5Database:
                 "workplace_id": workplace_id,
                 "workplace_name": wp_name,
                 "kind": kind,
+                "source": entry.get("source"),
                 "leave_name": leave_name,
                 "display_name": display_name,
                 "spshi_id": entry.get("spshi_id"),
@@ -4749,6 +4811,27 @@ class SP5Database:
                         shift_detail[(eid, d)] = r.get("NAME", "Sonderschicht")
                     if (eid, d) not in shift_duration:
                         shift_duration[(eid, d)] = float(r.get("DURATION", 0) or 0)
+
+        # Expandierte 5CYASS-Zyklusdienste (Spec 6.3/4.2): zyklusgeplante
+        # Mitarbeiter erzeugen dieselben Konflikte; 5MASHI-Tage gewinnen
+        # (bereits in _cycle_shifts_by_employee ausgefiltert).
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        for eid, recs in self._cycle_shifts_by_employee(von, bis).items():
+            if eid not in member_ids:
+                continue
+            for r in recs:
+                d = r.get("DATE", "")
+                if not d.startswith(prefix):
+                    continue
+                shift_dates.setdefault(eid, set()).add(d)
+                sid = r.get("SHIFTID")
+                if (eid, d) not in shift_detail:
+                    shift_detail[(eid, d)] = shift_name_map.get(sid, "") if sid else ""
+                if (eid, d) not in shift_duration:
+                    shift_duration[(eid, d)] = (
+                        shift_dur_map.get(sid, 0.0) if sid else 0.0
+                    )
 
         # Build: employee_id -> list of absence date strings, and date -> leave type name
         absence_dates: dict = {}
