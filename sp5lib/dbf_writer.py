@@ -3,23 +3,64 @@ DBF write support for Schichtplaner5 databases.
 
 Implements:
   append_record(filepath, fields, record)   – append a new record to a .DBF file
+  update_record(filepath, fields, idx, d)   – overwrite fields of a record in-place
   delete_record(filepath, fields, index)    – mark a record as deleted (0x2A flag)
   find_all_records(filepath, fields, **kw) – find all records matching filter criteria
 
-Encoding contract (verified from real SP5 files):
-  • String (C) fields: UTF-16 LE string bytes + \x00\x00 null terminator
-    + \x20 space padding up to field_len.
+Encoding contract (verified byte-by-byte against the original sample DB):
+  • Text (C) fields (Spec D-19): UTF-16 LE string bytes + \x00\x00 null
+    terminator + \x20 space padding up to field_len.
     Empty strings: \x00\x00 + \x20 * (field_len - 2).
+  • ASCII-class (C) fields (Spec D-20/D-31: WORKDAYS, VALIDDAYS, DAILYDEM,
+    STARTEND*, CATEGORY/REPORT in 5USER): plain cp1252 bytes, \x20-padded.
+    Empty value: all spaces.
+  • Binary (C) fields (Spec D-21: DIGEST, CREATIME, UUID): raw bytes,
+    \x00-padded.
   • Date (D) fields: 'YYYYMMDD' ASCII, space-padded to field_len.
-  • Numeric (N/F) fields: right-aligned ASCII decimal string, space-padded left.
-  • Logical (L) fields: 'T' or 'F' (1 byte).
+  • Numeric (N) fields: right-aligned ASCII decimal string, space-padded left.
+  • Float (F) fields (Spec D-15): right-aligned ASCII decimal with exactly 4
+    fraction digits (oracle: '7.7000'), regardless of the descriptor's dec
+    byte (the SP5 schema declares every F field as 'F 19 dec=0').
+  • Logical (L) fields: 'T' or 'F' (1 byte; unused by SP5, Spec D-18).
   • Memo (M) fields: all spaces (not written by this module).
+  • Duplicate field names (5DADEM's two START fields, Spec D-55) are addressed
+    position-based: the second occurrence is keyed 'START2' in record dicts,
+    matching the read path (dbf_reader._dedupe_names).
+
+Change journal (-L companion tables, Spec §2.7):
+  • Every append/update/delete also appends one entry to '<table>-L.DBF':
+    NUMBER = last journal NUMBER + 1, CHANGEID1..3 = the record's composite
+    key per Spec D-41 (unused components 0), CHANGE = 1 (record added/changed,
+    upsert semantics) or 2 (record deleted). Original clients poll these
+    journals to pick up external changes (Spec D-69/D-71/D-76).
+  • Journaling is unconditional — the original's -L upkeep is not gated by
+    5USETT.CHANGELOG (Spec D-68).
+  • If the -L file is missing, the journal entry is skipped with a warning;
+    the main write succeeds. (The original recreates missing companion files
+    on next open, Spec D-14.)
+
+CDX index files (Spec D-13/D-14):
+  • SP5/CodeBase only recreates *missing* index files on open; an existing
+    stale CDX would be reused and would no longer match the table after a
+    write from this module. Therefore the .CDX files of the modified table
+    (main and -L) are DELETED after every successful write, which forces the
+    original to rebuild them from its compiled-in tag definitions (D-14).
+    Header byte 28 (MDX/CDX flag, 0x01 in all original files) is left
+    untouched. Set INVALIDATE_CDX = False to opt out (only safe if the data
+    is never opened by an original SP5 client again).
 
 Write safety:
   • Exclusive fcntl.flock() around all write operations.
   • Header bytes 1-3 (YY MM DD of last update) updated on every write.
   • EOF marker (0x1A) preserved / re-appended after every write.
-  • CDX index files are NOT touched – SP5 will rebuild them on next open.
+
+Known interop limitation (Spec D-16): the original uses CodeBase byte-range
+locks inside the DBF files, taken as an atomic group lock over the main and
+-L files of all tables. This module uses POSIX flock() per file instead —
+the two locking schemes do not see each other, and data + journal writes are
+not atomic as a pair. Concurrent writing while an original SP5 client is
+running is therefore NOT safe; sequential coexistence (original closed during
+lib writes) is.
 """
 
 import fcntl
@@ -30,9 +71,28 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any
 
-from .dbf_reader import _decode_string, _parse_date, get_table_fields
+from .dbf_reader import (
+    _dedupe_names,
+    _parse_record,
+    get_table_fields,
+    read_dbf,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Delete the .CDX files of a modified table after every successful write
+#: (see module docstring, "CDX index files"). Interop-safe default.
+INVALIDATE_CDX = True
+
+#: ASCII-class C fields (Spec D-20): plain cp1252, space-separated lists.
+#: STARTEND* (D-31) belongs to the same class. Name-based matching is exact
+#: for the fixed 30-table schema (CATEGORY/REPORT exist as C fields only in
+#: 5USER; the CATEGORY fields of 5SHIFT/5LEAVT are N-typed).
+_ASCII_C_FIELDS = {"WORKDAYS", "VALIDDAYS", "DAILYDEM", "CATEGORY", "REPORT"}
+
+
+def _is_ascii_c_field(name: str) -> bool:
+    return name in _ASCII_C_FIELDS or name.startswith("STARTEND")
 
 
 # ─── string / field encoding ──────────────────────────────────────────────────
@@ -92,10 +152,20 @@ def _encode_field(value: Any, field: dict) -> bytes:
         return b" " * flen
 
     if ftype == "C":
-        # If bytes are passed directly (e.g. raw binary fields like DIGEST),
-        # write them as-is padded to field length.
+        # Binary fields (Spec D-21): raw bytes, \x00-padded.
         if isinstance(value, bytes):
             return (value + b"\x00" * flen)[:flen]
+        if _is_ascii_c_field(field["name"]):
+            # ASCII-class fields (Spec D-20/D-31): plain cp1252, space-padded.
+            s = str(value) if value else ""
+            encoded = s.encode("cp1252", errors="replace")
+            if len(encoded) > flen:
+                logger.warning(
+                    "DBF ASCII field truncation: %s value '%s' exceeds %d bytes",
+                    field["name"], s[:30], flen,
+                )
+                encoded = encoded[:flen]
+            return encoded + b"\x20" * (flen - len(encoded))
         return _encode_string(str(value) if value else "", flen)
 
     elif ftype == "D":
@@ -109,7 +179,12 @@ def _encode_field(value: Any, field: dict) -> bytes:
 
     elif ftype in ("N", "F"):
         try:
-            if fdec > 0:
+            if ftype == "F":
+                # Spec D-15: F fields always carry 4 fraction digits in the
+                # original files ('7.7000'), even though the descriptor says
+                # dec=0. Match that byte format.
+                s = f"{{:>{flen}.4f}}".format(float(value))
+            elif fdec > 0:
                 fmt = f"{{:>{flen}.{fdec}f}}"
                 s = fmt.format(float(value))
             else:
@@ -181,6 +256,105 @@ def _exclusive_open(filepath: str):
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+# ─── change journal & index invalidation ──────────────────────────────────────
+
+#: Composite journal keys per table (Spec D-41): CHANGEID1..3 = key components.
+#: Tables not listed here have the single-component key (ID).
+_JOURNAL_KEYS: dict[str, tuple[str, ...]] = {
+    "5ABSEN": ("ID", "EMPLOYEEID"),
+    "5BOOK": ("ID", "EMPLOYEEID"),
+    "5CYASS": ("ID", "EMPLOYEEID"),
+    "5GRASG": ("ID", "EMPLOYEEID"),
+    "5LEAEN": ("ID", "EMPLOYEEID"),
+    "5MASHI": ("ID", "EMPLOYEEID"),
+    "5NOTE": ("ID", "EMPLOYEEID"),
+    "5OVER": ("ID", "EMPLOYEEID"),
+    "5RESTR": ("ID", "EMPLOYEEID"),
+    "5SPSHI": ("ID", "EMPLOYEEID"),
+    "5DADEM": ("ID", "GROUPID"),
+    "5HOBAN": ("ID", "GROUPID"),
+    "5PERIO": ("ID", "GROUPID"),
+    "5SHDEM": ("ID", "GROUPID"),
+    "5SPDEM": ("ID", "GROUPID"),
+    "5EMACC": ("ID", "USERID"),
+    "5GRACC": ("ID", "USERID"),
+    "5CYENT": ("ID", "CYCLEEID"),
+    "5CYEXC": ("ID", "EMPLOYEEID", "CYCLEASSID"),
+}
+
+
+def _table_stem(filepath: str) -> str:
+    return os.path.splitext(os.path.basename(filepath))[0]
+
+
+def _is_journal_file(filepath: str) -> bool:
+    return _table_stem(filepath).upper().endswith("-L")
+
+
+def _journal_path(filepath: str) -> str | None:
+    """Return the path of the table's -L companion, or None if absent."""
+    base, ext = os.path.splitext(filepath)
+    for suffix in ("-L", "-l"):
+        candidate = base + suffix + ext
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _invalidate_cdx(filepath: str) -> None:
+    """Delete the table's stale .CDX so the original rebuilds it (Spec D-14)."""
+    if not INVALIDATE_CDX:
+        return
+    base, _ = os.path.splitext(filepath)
+    for ext in (".CDX", ".cdx"):
+        candidate = base + ext
+        if os.path.exists(candidate):
+            try:
+                os.remove(candidate)
+            except OSError as exc:
+                logger.warning("Could not remove stale index %s: %s", candidate, exc)
+
+
+def _append_journal(filepath: str, record: dict, change: int) -> None:
+    """Append a change-journal entry (Spec D-69/D-72) for *record* of *filepath*.
+
+    change: 1 = record added/changed (upsert), 2 = record deleted.
+    Missing -L file: skip with a warning (main write stays valid).
+    """
+    jpath = _journal_path(filepath)
+    if jpath is None:
+        logger.warning(
+            "DBF change journal missing for %s — entry skipped "
+            "(running original clients will not see this change)",
+            filepath,
+        )
+        return
+
+    entries = read_dbf(jpath)
+    next_number = max((int(e.get("NUMBER", 0) or 0) for e in entries), default=0) + 1
+
+    keys = _JOURNAL_KEYS.get(_table_stem(filepath).upper(), ("ID",))
+    ids = [int(record.get(k) or 0) for k in keys]
+    ids += [0] * (3 - len(ids))
+
+    journal_record = {
+        "NUMBER": next_number,
+        "CHANGEID1": ids[0],
+        "CHANGEID2": ids[1],
+        "CHANGEID3": ids[2],
+        "CHANGE": change,
+    }
+    # append_record on a -L file does not journal again (guard via _is_journal_file)
+    append_record(jpath, get_table_fields(jpath), journal_record)
+
+
+def _after_write(filepath: str, record: dict, change: int) -> None:
+    """Post-write upkeep: journal entry (D-69) + index invalidation (D-14)."""
+    if not _is_journal_file(filepath):
+        _append_journal(filepath, record, change)
+    _invalidate_cdx(filepath)
+
+
 # ─── public API ───────────────────────────────────────────────────────────────
 
 
@@ -202,10 +376,13 @@ def append_record(filepath: str, fields: list[dict], record: dict) -> int:
     int
         New total record count after appending.
     """
-    # Build the raw record bytes (1 active-flag byte + field data)
+    # Build the raw record bytes (1 active-flag byte + field data).
+    # Field values are looked up by deduplicated name (5DADEM: START/START2),
+    # matching the read path.
     row = bytearray(b"\x20")  # delete-flag: active
-    for field in fields:
-        row += _encode_field(record.get(field["name"]), field)
+    names = _dedupe_names([str(f["name"]) for f in fields])
+    for field, fname in zip(fields, names, strict=True):
+        row += _encode_field(record.get(fname), field)
 
     num_records, header_size, record_size = _read_header_info(filepath)
 
@@ -257,6 +434,7 @@ def append_record(filepath: str, fields: list[dict], record: dict) -> int:
                 )
             raise
 
+    _after_write(filepath, record, change=1)
     return new_count
 
 
@@ -281,12 +459,17 @@ def delete_record(filepath: str, fields: list[dict], record_index: int) -> None:
 
     with _exclusive_open(filepath) as f:
         f.seek(byte_offset)
-        current = f.read(1)
-        if current == b"\x2a":
+        raw = f.read(record_size)
+        if not raw:
+            raise ValueError(f"Record {record_index} could not be read (empty read)")
+        if raw[0] == 0x2A:
             return  # already deleted – nothing to do
         f.seek(byte_offset)
         f.write(b"\x2a")
         _stamp_header(f)
+
+    # Journal entry needs the deleted record's key components (Spec D-69).
+    _after_write(filepath, _parse_record(raw, fields), change=2)
 
 
 def update_record(
@@ -331,17 +514,21 @@ def update_record(
         if raw[0] == 0x2A:
             raise ValueError(f"Record {record_index} is already deleted")
 
-        # Overwrite only the requested fields
+        # Overwrite only the requested fields (keys are deduplicated names,
+        # 5DADEM: START/START2 — matching the read path)
+        names = _dedupe_names([str(f_["name"]) for f_ in fields])
         offset = 1  # skip delete-flag byte
-        for field in fields:
-            if field["name"] in data:
-                encoded = _encode_field(data[field["name"]], field)
+        for field, fname in zip(fields, names, strict=True):
+            if fname in data:
+                encoded = _encode_field(data[fname], field)
                 raw[offset : offset + field["len"]] = encoded
             offset += field["len"]
 
         f.seek(byte_offset)
         f.write(bytes(raw))
         _stamp_header(f)
+
+    _after_write(filepath, _parse_record(bytes(raw), fields), change=1)
 
 
 def find_all_records(
@@ -408,47 +595,6 @@ def find_all_records(
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     return results
-
-
-# ─── internal parsing (re-uses dbf_reader helpers) ────────────────────────────
-
-
-def _parse_record(raw: bytes, fields: list[dict]) -> dict[str, Any]:
-    """Parse a raw record byte-string into a dict using the given field descriptors."""
-    record: dict[str, Any] = {}
-    offset = 1  # skip delete-flag
-
-    for field in fields:
-        chunk = raw[offset : offset + field["len"]]
-        ftype = field["type"]
-        fname = field["name"]
-
-        val: Any = None
-        if ftype == "C":
-            val = _decode_string(chunk)
-        elif ftype == "D":
-            val = _parse_date(chunk.decode("ascii", errors="replace"))
-        elif ftype in ("N", "F"):
-            s = chunk.decode("ascii", errors="replace").strip()
-            if not s or s == ".":
-                val = 0
-            else:
-                try:
-                    val = float(s) if ("." in s or field["dec"] > 0) else int(s)
-                except ValueError:
-                    val = 0
-        elif ftype == "L":
-            s = chunk.decode("ascii", errors="replace").strip()
-            val = s in ("T", "t", "Y", "y", "1")
-        elif ftype == "M":
-            val = None
-        else:
-            val = chunk.decode("ascii", errors="replace").strip()
-
-        record[fname] = val
-        offset += field["len"]
-
-    return record
 
 
 def _matches(record: dict, filters: dict) -> bool:

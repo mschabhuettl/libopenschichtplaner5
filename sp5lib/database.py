@@ -597,7 +597,7 @@ class SP5Database:
             "ADMIN": is_admin,
             "DIGEST": digest,
             "RIGHTS": rights,
-            "CATEGORY": "\x31\x00" * 20,
+            "CATEGORY": " ".join(["1"] * 20),  # ASCII 20-slot mask (oracle format)
             "ADDEMPL": 0,
             "WDUTIES": write_perms,
             "WABSENCES": write_perms,
@@ -620,7 +620,7 @@ class SP5Database:
             "ACCVOWND": 1,
             "ACCADMWND": is_admin,
             "MINITABLE": 0,
-            "REPORT": "\x31\x31" * 20,
+            "REPORT": " ".join(["1"] * 20),  # ASCII 20-slot mask (oracle format)
             "HIDE": 0,
             "RESERVED": "",
         }
