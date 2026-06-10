@@ -3655,8 +3655,13 @@ class SP5Database:
         days: float,
         carry_forward: float = 0,
         leave_type_id: int = 0,
+        in_days: bool = True,
     ) -> dict:
-        """Create or update a leave entitlement record."""
+        """Create or update a leave entitlement record.
+
+        ENTITLEMNT/REST sind Gleitkommawerte (Spec 3.7, F-Felder) —
+        Halbtage wie 12,5 bleiben erhalten.
+        """
         filepath = self._table("LEAEN")
         fields = get_table_fields(filepath)
 
@@ -3676,9 +3681,9 @@ class SP5Database:
             "EMPLOYEEID": employee_id,
             "YEAR": year,
             "LEAVETYPID": leave_type_id,
-            "ENTITLEMNT": int(days),
-            "REST": int(carry_forward),
-            "INDAYS": 1,
+            "ENTITLEMNT": float(days),
+            "REST": float(carry_forward),
+            "INDAYS": 1 if in_days else 0,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
@@ -3689,42 +3694,47 @@ class SP5Database:
             "leave_type_id": leave_type_id,
             "entitlement": days,
             "carry_forward": carry_forward,
-            "in_days": True,
+            "in_days": in_days,
         }
 
-    def _get_default_entitlement(self) -> float:
-        """Return the STDENTIT from the first entitled leave type (e.g. 'Urlaub')."""
-        for lt in self.get_leave_types(include_hidden=True):
-            if lt.get("ENTITLED") and lt.get("STDENTIT", 0) > 0:
-                return float(lt["STDENTIT"])
-        return 25.0
-
     def get_leave_balance(self, employee_id: int, year: int) -> dict:
-        """Calculate leave balance: entitlement + carry_forward - used = remaining."""
-        default_ent = self._get_default_entitlement()
-        entitlements = self.get_leave_entitlements(year=year, employee_id=employee_id)
+        """Calculate leave balance: entitlement + carry_forward - used = remaining.
 
-        if entitlements:
-            total_entitlement = sum(e["entitlement"] for e in entitlements)
-            total_carry = sum(e["carry_forward"] for e in entitlements)
-        else:
-            total_entitlement = default_ent
-            total_carry = 0.0
+        Je anspruchsverbundener Art (ENTITLED=1) über calculations.leave_account
+        berechnet (Spec 3.7.1: Verbrauch nach 3.5.2/3.5.3 mit CHARGETYP/
+        CHARGEHRS/COUNTALL und INTERVAL-Halbtagen) und über die Arten summiert.
+        Ohne 5LEAEN-Satz gibt es keinen Default-Anspruch (das Original zeigt
+        dann keinen Anspruch).
+        """
+        emp = self.get_employee(employee_id)
+        ctx = (
+            self._calc_context(emp)
+            if emp
+            else calc.EmployeeContext(workdays=(False,) * 8)
+        )
+        holidays = self._calc_holidays()
+        leaen_rows = [
+            r for r in self._read("LEAEN") if r.get("EMPLOYEEID") == employee_id
+        ]
+        absences = [
+            r for r in self._read("ABSEN") if r.get("EMPLOYEEID") == employee_id
+        ]
 
-        # Count vacation absences (ENTITLED leave types)
-        lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
-        entitled_ids = {lt_id for lt_id, lt in lt_map.items() if lt.get("ENTITLED")}
-
-        year_str = str(year)
-        used = 0.0
-        for r in self._read("ABSEN"):
-            if r.get("EMPLOYEEID") != employee_id:
+        total_entitlement = total_carry = used = 0.0
+        for lt in self.get_leave_types(include_hidden=True):
+            if not lt.get("ENTITLED"):
                 continue
-            d = r.get("DATE", "")
-            if not d or not d.startswith(year_str):
-                continue
-            if r.get("LEAVETYPID", 0) in entitled_ids:
-                used += 1.0
+            acct = calc.leave_account(
+                ctx,
+                year,
+                lt,
+                holidays=holidays,
+                entitlements=leaen_rows,
+                absences=absences,
+            )
+            total_entitlement += acct.entitlement
+            total_carry += acct.rest
+            used += acct.taken
 
         remaining = total_entitlement + total_carry - used
         forfeiture_date = f"{year}-12-31"
@@ -3738,7 +3748,9 @@ class SP5Database:
             "used": used,
             "remaining": remaining,
             "forfeiture_date": forfeiture_date,
-            "has_custom_entitlement": len(entitlements) > 0,
+            "has_custom_entitlement": any(
+                r.get("YEAR") == year for r in leaen_rows
+            ),
         }
 
     def get_leave_balance_group(self, year: int, group_id: int) -> list[dict]:
@@ -3824,10 +3836,78 @@ class SP5Database:
         return count
 
     # ── Annual Close ──────────────────────────────────────────
+    def _annual_close_employee(self, emp: dict, year: int) -> tuple[dict, list[dict]]:
+        """Jahresabschluss-Kennzahlen und 5LEAEN-Zeilen (year+1) eines MA.
+
+        Spec 3.7.2 über calculations.annual_close: je Abwesenheitsart mit
+        ENTITLED=1 (Übertrag nur bei CARRYFWD=1), restNeu = gesamt − verbraucht
+        ohne Cap, ENTITLEMNT-Vorbelegung aus vorhandenem Folgejahres-Wert bzw.
+        STDENTIT. Verbrauch nach 3.5.2/3.5.3 (Halbtage zählen 0,5).
+        """
+        eid = emp["ID"]
+        ctx = self._calc_context(emp)
+        holidays = self._calc_holidays()
+        leave_types = self.get_leave_types(include_hidden=True)
+        leaen_rows = [r for r in self._read("LEAEN") if r.get("EMPLOYEEID") == eid]
+        absences = [r for r in self._read("ABSEN") if r.get("EMPLOYEEID") == eid]
+
+        new_rows = calc.annual_close(
+            ctx,
+            year,
+            holidays=holidays,
+            leave_types=leave_types,
+            entitlements=leaen_rows,
+            absences=absences,
+        )
+        carried_by_type = {int(r["LEAVETYPID"]): float(r["REST"]) for r in new_rows}
+
+        entitlement = carry_in = used = remaining = 0.0
+        carried = forfeited = 0.0
+        for lt in leave_types:
+            if not lt.get("ENTITLED"):
+                continue
+            acct = calc.leave_account(
+                ctx,
+                year,
+                lt,
+                holidays=holidays,
+                entitlements=leaen_rows,
+                absences=absences,
+            )
+            entitlement += acct.entitlement
+            carry_in += acct.rest
+            used += acct.taken
+            remaining += acct.remaining
+            lt_id = int(lt.get("ID") or 0)
+            if lt_id in carried_by_type:
+                carried += carried_by_type[lt_id]
+            else:  # ENTITLED ohne CARRYFWD: Rest verfällt (Spec 3.7.2)
+                forfeited += max(0.0, acct.remaining)
+
+        summary = {
+            "employee_id": eid,
+            "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                ", "
+            ),
+            "entitlement": entitlement,
+            "carry_forward_in": carry_in,
+            "total": entitlement + carry_in,
+            "used": used,
+            "remaining": remaining,
+            "proposed_carry_forward": carried,
+            "forfeited": forfeited,
+        }
+        return summary, new_rows
+
     def get_annual_close_preview(
         self, year: int, group_id: int | None = None, carry_forward_days: float = 10
     ) -> dict:
-        """Preview annual close without saving changes."""
+        """Preview annual close without saving changes.
+
+        ``carry_forward_days`` bleibt aus API-Kompatibilität erhalten, wird
+        aber ignoriert: das Original überträgt ungedeckelt gesamt − verbraucht
+        je Art (Spec 3.7.2, kein Cap).
+        """
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
@@ -3838,33 +3918,10 @@ class SP5Database:
         total_forfeited = 0.0
 
         for emp in employees:
-            eid = emp["ID"]
-            balance = self.get_leave_balance(eid, year)
-            remaining = balance["remaining"]
-            carry = min(float(remaining), carry_forward_days) if remaining > 0 else 0.0
-            forfeited = (
-                max(0.0, float(remaining) - carry_forward_days)
-                if remaining > 0
-                else 0.0
-            )
-
-            total_carry += carry
-            total_forfeited += forfeited
-            details.append(
-                {
-                    "employee_id": eid,
-                    "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
-                        ", "
-                    ),
-                    "entitlement": balance["entitlement"],
-                    "carry_forward_in": balance["carry_forward"],
-                    "total": balance["total"],
-                    "used": balance["used"],
-                    "remaining": remaining,
-                    "proposed_carry_forward": carry,
-                    "forfeited": forfeited,
-                }
-            )
+            summary, _rows = self._annual_close_employee(emp, year)
+            total_carry += summary["proposed_carry_forward"]
+            total_forfeited += summary["forfeited"]
+            details.append(summary)
 
         return {
             "year": year,
@@ -3896,7 +3953,12 @@ class SP5Database:
         self, year: int, group_id: int | None = None, carry_forward_days: float = 10
     ) -> dict:
         """
-        Run annual close: calculate remaining vacation, set carry_forward for year+1.
+        Run annual close: write the 5LEAEN rows for year+1 per leave type.
+
+        Spec 3.7.2 über calculations.annual_close: je Art fortgeschrieben
+        (kein Kollabieren auf LEAVETYPID=0), Übertrag nur bei CARRYFWD=1 und
+        ungedeckelt (``carry_forward_days`` wird aus API-Kompatibilität
+        akzeptiert, aber ignoriert), Float-Ansprüche bleiben erhalten.
         Returns summary with { processed, total_carry_forward, total_forfeited, already_existed }.
         NOTE: Not fully atomic — partial failures may leave some employees processed and others not.
         """
@@ -3913,36 +3975,28 @@ class SP5Database:
 
         for emp in employees:
             eid = emp["ID"]
-            balance = self.get_leave_balance(eid, year)
-            remaining = balance["remaining"]
-            carry = min(float(remaining), carry_forward_days) if remaining > 0 else 0.0
-            forfeited = (
-                max(0.0, float(remaining) - carry_forward_days)
-                if remaining > 0
-                else 0.0
-            )
+            summary, new_rows = self._annual_close_employee(emp, year)
 
-            # Set entitlement for next year with carry_forward
-            next_ent = balance["entitlement"]  # keep same entitlement
-            self.set_leave_entitlement(
-                employee_id=eid,
-                year=year + 1,
-                days=next_ent,
-                carry_forward=carry,
-            )
+            for row in new_rows:
+                self.set_leave_entitlement(
+                    employee_id=eid,
+                    year=year + 1,
+                    days=float(row["ENTITLEMNT"]),
+                    carry_forward=float(row["REST"]),
+                    leave_type_id=int(row["LEAVETYPID"]),
+                    in_days=bool(row["INDAYS"]),
+                )
 
-            total_carry += carry
-            total_forfeited += forfeited
+            total_carry += summary["proposed_carry_forward"]
+            total_forfeited += summary["forfeited"]
             processed += 1
             details.append(
                 {
                     "employee_id": eid,
-                    "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
-                        ", "
-                    ),
-                    "remaining": remaining,
-                    "carry_forward": carry,
-                    "forfeited": forfeited,
+                    "employee_name": summary["employee_name"],
+                    "remaining": summary["remaining"],
+                    "carry_forward": summary["proposed_carry_forward"],
+                    "forfeited": summary["forfeited"],
                 }
             )
 

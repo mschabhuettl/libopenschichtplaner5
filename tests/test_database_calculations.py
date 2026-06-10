@@ -259,3 +259,79 @@ def test_cycle_assignments_expand_into_hours(tmp_path):
     })
     assert stats[0]["actual_hours"] == pytest.approx(23 * 8.0)
     assert db_holidays.get_statistics(2014, 12)[0]["actual_hours"] == pytest.approx(20 * 8.0)
+
+
+# ─── 3.7 Urlaub: Balance und Jahresabschluss (Befunde 6 und 11) ───────────────
+
+
+def _leave_db(tmp_path, absen_rows, leaen_rows):
+    return make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5LEAVT": [URLAUB, SONDERURLAUB],
+        "5LEAEN": leaen_rows,
+        "5ABSEN": absen_rows,
+    })
+
+
+def test_leave_balance_per_type_and_half_days(tmp_path):
+    """Befund 11: Verbrauch nach 3.5.2 (Halbtag = 0,5), kein Default-Anspruch."""
+    absen = [
+        {"ID": 1, "EMPLOYEEID": 1, "DATE": "2014-06-02", "LEAVETYPID": 1,
+         "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0},
+        {"ID": 2, "EMPLOYEEID": 1, "DATE": "2014-06-03", "LEAVETYPID": 1,
+         "TYPE": 0, "INTERVAL": 1, "START": 0, "END": 0},  # halber Tag
+        {"ID": 3, "EMPLOYEEID": 1, "DATE": "2014-06-04", "LEAVETYPID": 14,
+         "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0},
+    ]
+    leaen = [
+        {"ID": 1, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 1,
+         "ENTITLEMNT": 30.0, "REST": 2.0, "INDAYS": 1},
+        {"ID": 2, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 14,
+         "ENTITLEMNT": 2.0, "REST": 0.0, "INDAYS": 1},
+    ]
+    db = _leave_db(tmp_path, absen, leaen)
+    bal = db.get_leave_balance(1, 2014)
+    assert bal["entitlement"] == pytest.approx(32.0)
+    assert bal["carry_forward"] == pytest.approx(2.0)
+    assert bal["used"] == pytest.approx(2.5)  # 1 + 0,5 Urlaub + 1 Sonderurlaub
+    assert bal["remaining"] == pytest.approx(31.5)
+    # Ohne 5LEAEN-Satz: kein erfundener Default-Anspruch
+    (tmp_path / "leer").mkdir()
+    empty = _leave_db(tmp_path / "leer", [], [])
+    assert empty.get_leave_balance(1, 2014)["entitlement"] == 0.0
+
+
+def test_set_leave_entitlement_keeps_floats(tmp_path):
+    """Befund 6 (Halbtage): 12,5 / 0,5 dürfen nicht zu 12 / 0 werden."""
+    db = _leave_db(tmp_path, [], [])
+    db.set_leave_entitlement(1, 2014, days=12.5, carry_forward=0.5, leave_type_id=1)
+    rows = db.get_leave_entitlements(year=2014, employee_id=1)
+    assert rows[0]["entitlement"] == pytest.approx(12.5)
+    assert rows[0]["carry_forward"] == pytest.approx(0.5)
+
+
+def test_annual_close_per_type_no_cap(tmp_path):
+    """Befund 6: je Art fortschreiben, CARRYFWD beachten, kein 10-Tage-Cap."""
+    absen = [
+        {"ID": i, "EMPLOYEEID": 1, "DATE": f"2014-06-{i + 1:02d}", "LEAVETYPID": 1,
+         "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0}
+        for i in range(1, 6)  # 5 Tage Urlaub genommen
+    ]
+    leaen = [
+        {"ID": 1, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 1,
+         "ENTITLEMNT": 30.0, "REST": 2.0, "INDAYS": 1},
+        {"ID": 2, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 14,
+         "ENTITLEMNT": 2.0, "REST": 0.0, "INDAYS": 1},
+    ]
+    db = _leave_db(tmp_path, absen, leaen)
+    result = db.run_annual_close(2014)
+    # Urlaub (CARRYFWD=1): Rest 30+2-5 = 27 — ungedeckelt, kein Cap bei 10
+    assert result["total_carry_forward"] == pytest.approx(27.0)
+    # Sonderurlaub (CARRYFWD=0): Rest 2 verfällt
+    assert result["total_forfeited"] == pytest.approx(2.0)
+    rows = {r["leave_type_id"]: r for r in db.get_leave_entitlements(year=2015, employee_id=1)}
+    # Je Art fortgeschrieben — kein Kollabieren auf LEAVETYPID=0; Sonderurlaub
+    # (CARRYFWD=0) wird ohne Dialog-Option gar nicht verarbeitet (Spec 3.7.2)
+    assert set(rows) == {1}
+    assert rows[1]["entitlement"] == pytest.approx(30.0)  # STDENTIT-Vorbelegung
+    assert rows[1]["carry_forward"] == pytest.approx(27.0)
