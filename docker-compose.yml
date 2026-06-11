@@ -1,0 +1,7 @@
+# Build-/Test-Compose — die Library hat keinen Runtime-Service.
+# Verwendung: docker compose run --rm test
+services:
+  test:
+    build:
+      context: .
+      target: test

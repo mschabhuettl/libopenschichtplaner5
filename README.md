@@ -78,6 +78,17 @@ database (local reference material, never committed):
 SP5_GOLDEN_DB=/path/to/sp5/Daten pytest tests/test_golden_sample_db.py -v
 ```
 
+### Docker (Build-/Test-Image)
+
+The library ships no runtime service — the Dockerfile only provides a
+reproducible lint + test environment (`python:3.12-slim`, stage `test` runs
+`ruff check .` and `pytest`):
+
+```bash
+docker compose run --rm test
+# equivalent: docker build --target test -t libopenschichtplaner5:test . && docker run --rm libopenschichtplaner5:test
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Extracted (with full git history) from
