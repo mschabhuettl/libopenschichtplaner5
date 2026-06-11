@@ -863,13 +863,53 @@ class SP5Database:
             "WABSENCES": bool(r.get("WABSENCES")) if not is_admin else True,
             "WOVERTIMES": bool(r.get("WOVERTIMES")) if not is_admin else True,
             "WNOTES": bool(r.get("WNOTES")) if not is_admin else True,
+            "WDEVIATION": bool(r.get("WDEVIATION")) if not is_admin else True,
             "WCYCLEASS": bool(r.get("WCYCLEASS")) if not is_admin else True,
+            "WSWAPONLY": bool(r.get("WSWAPONLY")) if not is_admin else True,
             "WPAST": bool(r.get("WPAST")) if not is_admin else True,
+            "ADDEMPL": bool(r.get("ADDEMPL")) if not is_admin else True,
             "WACCEMWND": bool(r.get("WACCEMWND")) if not is_admin else True,
             "WACCGRWND": bool(r.get("WACCGRWND")) if not is_admin else True,
             "BACKUP": bool(r.get("BACKUP")) if not is_admin else True,
+            # SHOWABS ist dreiwertig (N 5, Spec 9.5.2 Nr. 2.1) — hier als
+            # Wahrheitswert; Admin sieht immer alles
+            "SHOWABS": bool(r.get("SHOWABS")) if not is_admin else True,
+            "SHOWNOTES": bool(r.get("SHOWNOTES")) if not is_admin else True,
             "SHOWSTATS": bool(r.get("SHOWSTATS")) if not is_admin else True,
             "ACCADMWND": is_admin,
+        }
+
+    # Granulare 5USER-Schreib-/Anzeige-Flags (Spec 9.6) → permissions-Schlüssel
+    _USER_PERMISSION_FIELDS = {
+        "wduties": "WDUTIES",
+        "wabsences": "WABSENCES",
+        "wovertimes": "WOVERTIMES",
+        "wnotes": "WNOTES",
+        "wdeviation": "WDEVIATION",
+        "wcycleass": "WCYCLEASS",
+        "wswaponly": "WSWAPONLY",
+        "wpast": "WPAST",
+        "addempl": "ADDEMPL",
+        "showabs": "SHOWABS",  # dreiwertig (Spec 9.5.2) — hier Wahrheitswert
+        "shownotes": "SHOWNOTES",
+        "showstats": "SHOWSTATS",
+        "backup": "BACKUP",
+    }
+
+    def get_user_permissions(self, user_id: int) -> dict | None:
+        """Granulare 5USER-Flags eines Benutzers (Spec 9.6) als
+        ``{permission: bool}``; Admin ⇒ alles True. None, wenn unbekannt."""
+        rows = self._read("USER")
+        r = next(
+            (x for x in rows if x.get("ID") == user_id and not x.get("HIDE")), None
+        )
+        if r is None:
+            return None
+        if r.get("ADMIN"):
+            return dict.fromkeys(self._USER_PERMISSION_FIELDS, True)
+        return {
+            key: bool(r.get(field))
+            for key, field in self._USER_PERMISSION_FIELDS.items()
         }
 
     def verify_user_password(self, name: str, password: str) -> dict | None:

@@ -789,14 +789,32 @@ class SP5PostgresDatabase:
             "WABSENCES": u.wabsences if not is_admin else True,
             "WOVERTIMES": u.wovertimes if not is_admin else True,
             "WNOTES": u.wnotes if not is_admin else True,
+            "WDEVIATION": u.wdeviation if not is_admin else True,
             "WCYCLEASS": u.wcycleass if not is_admin else True,
+            "WSWAPONLY": u.wswaponly if not is_admin else True,
             "WPAST": u.wpast if not is_admin else True,
+            "ADDEMPL": bool(u.addempl) if not is_admin else True,
             "WACCEMWND": u.waccemwnd if not is_admin else True,
             "WACCGRWND": u.waccgrwnd if not is_admin else True,
             "BACKUP": u.backup if not is_admin else True,
+            "SHOWABS": bool(u.showabs) if not is_admin else True,
+            "SHOWNOTES": u.shownotes if not is_admin else True,
             "SHOWSTATS": u.showstats if not is_admin else True,
             "ACCADMWND": is_admin,
         }
+
+    def get_user_permissions(self, user_id: int) -> dict | None:
+        """Granulare 5USER-Flags (Spec 9.6) als {permission: bool}; Admin ⇒ alles True."""
+        from .database import SP5Database
+
+        keys = SP5Database._USER_PERMISSION_FIELDS
+        with self._session() as s:
+            u = s.scalars(select(User).where(User.id == user_id, User.hide == False)).first()
+            if u is None:
+                return None
+            if u.admin:
+                return dict.fromkeys(keys, True)
+            return {key: bool(getattr(u, key)) for key in keys}
 
     def create_user(self, data: dict) -> dict:
         import bcrypt as _bcrypt
