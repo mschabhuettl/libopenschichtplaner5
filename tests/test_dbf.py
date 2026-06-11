@@ -83,6 +83,33 @@ def test_decode_ascii():
     assert "WORKDAYS" in _decode_string(raw)
 
 
+def test_decode_utf16_non_latin_roundtrip():
+    """Repro: Text ganz ohne Latin-1-Zeichen (kyrillisch/griechisch/hebräisch)
+    hat in UTF-16 LE High-Bytes 0x03-0x05 statt 0x00 — die Heuristik hielt
+    solche Felder für ASCII und lieferte Mojibake statt des Namens."""
+    for text in ("Иванов", "Δημήτρης", "כהן"):
+        raw = _encode_string(text, 40)
+        assert _is_utf16_le(raw) is True, text
+        assert _decode_string(raw) == text
+
+
+def test_decode_short_fields():
+    # kurze Felder (< 4 Bytes): 1 UTF-16-Zeichen bzw. ASCII-Reste
+    assert _decode_string("A".encode("utf-16-le")) == "A"
+    assert _decode_string(b"1 ") == "1"
+    assert _decode_string(b"") == ""
+    assert _decode_string(b"\x20\x20") == ""
+
+
+def test_decode_digit_masks_stay_ascii():
+    """Reine Ziffern-/Zeitmasken (WORKDAYS, VALIDDAYS, STARTEND*) sind
+    ASCII-Felder und dürfen nie als UTF-16 fehlerkannt werden."""
+    for mask in ("1 1 1 1 1 0 0 0", "0 0 0 0 0 1 0", "06:00-14:00", "0"):
+        raw = mask.encode("ascii") + b"\x20" * 4
+        assert _is_utf16_le(raw) is False, mask
+        assert _decode_string(raw) == mask
+
+
 # ─── numeric encode / overflow guard ──────────────────────────────────────────
 
 

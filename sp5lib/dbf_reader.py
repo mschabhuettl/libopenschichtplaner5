@@ -39,19 +39,25 @@ def _dedupe_names(names: list[str]) -> list[str]:
 def _is_utf16_le(raw: bytes) -> bool:
     """
     Heuristic: detect if raw bytes are UTF-16 LE encoded text.
-    In UTF-16 LE ASCII text, bytes at odd positions (1, 3, 5, ...) are 0x00.
-    Plain ASCII/binary data fields have non-zero bytes at odd positions.
+
+    In UTF-16 LE Latin-1 text, bytes at odd positions (1, 3, 5, ...) are 0x00;
+    for non-Latin scripts up to Arabic (Greek 0x03xx, Cyrillic 0x04xx, Hebrew
+    0x05xx, Arabic 0x06xx) they are 0x01..0x07. Plain ASCII data fields
+    (WORKDAYS, STARTEND*, ...) contain only printable bytes >= 0x20 at odd
+    positions, so any odd byte < 0x08 marks UTF-16 LE text. Known limitation:
+    text consisting ONLY of characters >= U+0800 (e.g. pure CJK) is still
+    misdetected as ASCII.
     """
     if len(raw) < 4:
-        # Very short field — check if first byte is 0 (empty UTF-16 LE)
-        return len(raw) >= 2 and raw[1] == 0x00
+        # Very short field — check if the second byte is a UTF-16 high byte
+        return len(raw) >= 2 and raw[1] < 0x08
     # Sample up to 8 bytes for detection
     sample_len = min(8, len(raw))
     sample = raw[:sample_len]
     odd_bytes = sample[1::2]
-    null_count = sum(1 for b in odd_bytes if b == 0x00)
-    # More than half of odd-position bytes are 0x00 → likely UTF-16 LE
-    return null_count > len(odd_bytes) // 2
+    high_count = sum(1 for b in odd_bytes if b < 0x08)
+    # More than half of odd-position bytes are UTF-16 high bytes → UTF-16 LE
+    return high_count > len(odd_bytes) // 2
 
 
 def _decode_string(raw: bytes) -> str:
