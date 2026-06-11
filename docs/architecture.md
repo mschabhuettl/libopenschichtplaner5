@@ -371,7 +371,7 @@ openschichtplaner5 (App)  ──requirements──►  openschichtplaner5-api (A
 **Editable-Workflow (Entwicklung):**
 - App-Repo: `make dev-link` → `pip install -e ../libopenschichtplaner5
   -e ../openschichtplaner5-api` ins `backend/.venv` (dokumentiert in
-  `openschichtplaner5/docs/DEVELOPMENT.md` und dessen `CLAUDE.md`).
+  `openschichtplaner5/docs/DEVELOPMENT.md`).
 - API-Repo-README: `pip install -e "../libopenschichtplaner5[postgres]"`.
 - Daher müssen die drei Repos als Geschwister ausgecheckt sein, damit die
   `../`-Pfade auflösen.
