@@ -24,3 +24,9 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+*.bak
+
+# Local tooling
+.claude/
+CLAUDE*.md
+AGENTS.md
