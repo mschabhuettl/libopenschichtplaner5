@@ -668,17 +668,66 @@ class SP5PostgresDatabase:
             ).rowcount
         return count
 
-    def add_absence(self, employee_id: int, date_str: str, leave_type_id: int) -> dict:
+    def add_absence(
+        self,
+        employee_id: int,
+        date_str: str,
+        leave_type_id: int,
+        interval: int = 0,
+        start: int = 0,
+        end: int = 0,
+    ) -> dict:
+        from .database import SP5Database
+
+        start, end = SP5Database._validate_absence_interval(interval, start, end)
         with self._session() as s:
             existing = s.scalars(
                 select(Absence).where(Absence.employee_id == employee_id, Absence.date == date_str)
             ).first()
             if existing:
                 raise ValueError(f"Absence for employee {employee_id} on {date_str} already exists.")
-            ab = Absence(employee_id=employee_id, date=date_str, leave_type_id=leave_type_id)
+            ab = Absence(
+                employee_id=employee_id, date=date_str, leave_type_id=leave_type_id,
+                interval=interval, start=start, end=end,
+            )
             s.add(ab)
             s.flush()
-            return {"ID": ab.id, "EMPLOYEEID": employee_id, "DATE": date_str, "LEAVETYPID": leave_type_id}
+            return {
+                "ID": ab.id, "EMPLOYEEID": employee_id, "DATE": date_str,
+                "LEAVETYPID": leave_type_id, "INTERVAL": interval,
+                "START": start, "END": end,
+            }
+
+    def update_absence(
+        self,
+        employee_id: int,
+        date_str: str,
+        leave_type_id: int | None = None,
+        interval: int | None = None,
+        start: int = 0,
+        end: int = 0,
+    ) -> dict:
+        from .database import SP5Database
+
+        with self._session() as s:
+            ab = s.scalars(
+                select(Absence).where(Absence.employee_id == employee_id, Absence.date == date_str)
+            ).first()
+            if ab is None:
+                raise ValueError(f"Absence for employee {employee_id} on {date_str} not found.")
+            if leave_type_id is not None:
+                ab.leave_type_id = leave_type_id
+            if interval is not None:
+                start, end = SP5Database._validate_absence_interval(interval, start, end)
+                ab.interval = interval
+                ab.start = start
+                ab.end = end
+            s.flush()
+            return {
+                "ID": ab.id, "EMPLOYEEID": ab.employee_id, "DATE": ab.date,
+                "LEAVETYPID": ab.leave_type_id, "INTERVAL": ab.interval,
+                "START": ab.start, "END": ab.end,
+            }
 
     # ── Users ──────────────────────────────────────────────────
 

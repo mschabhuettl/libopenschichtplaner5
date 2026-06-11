@@ -2811,12 +2811,48 @@ class SP5Database:
         return count
 
     # ── Write: add absence ────────────────────────────────────
-    def add_absence(self, employee_id: int, date_str: str, leave_type_id: int) -> dict:
+    @staticmethod
+    def _validate_absence_interval(interval: int, start: int, end: int) -> tuple[int, int]:
+        """Validiert 5ABSEN.INTERVAL/START/END (Spec 3.5.2, D-54).
+
+        INTERVAL: 0 = ganzer Tag, 1 = Vormittag, 2 = Nachmittag,
+        3 = stundenweise (START/END in Minuten ab Mitternacht; END <= START
+        bedeutet rechnerischen Tageswechsel, Spec 3.5.2 Nr. 3).
+        Liefert die zu speichernden (START, END) — bei INTERVAL != 3 immer (0, 0).
+        """
+        if interval not in (0, 1, 2, 3):
+            raise ValueError(f"INTERVAL muss 0..3 sein (war {interval})")
+        if interval != 3:
+            return 0, 0
+        if not (0 <= start <= 1440 and 0 <= end <= 1440):
+            raise ValueError("START/END müssen Minuten in 0..1440 sein")
+        if start == end:
+            # weder start < end noch Tageswechsel — 0/24h-Fenster ist ungültig
+            raise ValueError(
+                "Bei INTERVAL=3 muss START < END sein (oder END < START für "
+                "einen Tageswechsel); START == END ist ungültig"
+            )
+        return start, end
+
+    def add_absence(
+        self,
+        employee_id: int,
+        date_str: str,
+        leave_type_id: int,
+        interval: int = 0,
+        start: int = 0,
+        end: int = 0,
+    ) -> dict:
         """Write a new absence entry to ABSEN.
+
+        ``interval`` ist der Teiltagsmodus (Spec 3.5.2/D-54): 0 = ganzer Tag,
+        1 = Vormittag, 2 = Nachmittag, 3 = stundenweise mit ``start``/``end``
+        in Minuten ab Mitternacht (END <= START = Tageswechsel).
 
         Raises ValueError if an absence for this employee+date already exists
         (regardless of leave type — one absence per day per employee).
         """
+        start, end = self._validate_absence_interval(interval, start, end)
         filepath = self._table("ABSEN")
         fields = get_table_fields(filepath)
         # Guard against duplicate absences for the same employee on the same date
@@ -2836,13 +2872,50 @@ class SP5Database:
             "DATE": date_str,
             "LEAVETYPID": leave_type_id,
             "TYPE": 0,
-            "INTERVAL": 0,
-            "START": 0,
-            "END": 0,
+            "INTERVAL": interval,
+            "START": start,
+            "END": end,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
         return record
+
+    def update_absence(
+        self,
+        employee_id: int,
+        date_str: str,
+        leave_type_id: int | None = None,
+        interval: int | None = None,
+        start: int = 0,
+        end: int = 0,
+    ) -> dict:
+        """Update the absence entry for employee+date (5ABSEN).
+
+        ``leave_type_id`` und ``interval`` werden nur geändert, wenn angegeben;
+        bei ``interval`` gelten dieselben Regeln wie in :meth:`add_absence`.
+        Raises ValueError if no absence exists for this employee+date.
+        """
+        filepath = self._table("ABSEN")
+        fields = get_table_fields(filepath)
+        matches = find_all_records(
+            filepath, fields, EMPLOYEEID=employee_id, DATE=date_str
+        )
+        if not matches:
+            raise ValueError(
+                f"Absence for employee {employee_id} on {date_str} not found."
+            )
+        raw_idx, existing = matches[0]
+        update_data: dict[str, Any] = {}
+        if leave_type_id is not None:
+            update_data["LEAVETYPID"] = leave_type_id
+        if interval is not None:
+            start, end = self._validate_absence_interval(interval, start, end)
+            update_data["INTERVAL"] = interval
+            update_data["START"] = start
+            update_data["END"] = end
+        if update_data:
+            update_record(filepath, fields, raw_idx, update_data)
+        return {**existing, **update_data}
 
     # ── Staffing requirements (SHDEM + DADEM) ────────────────
     def get_staffing_requirements(
@@ -3889,6 +3962,11 @@ class SP5Database:
                     "leave_type_id": lt_id,
                     "leave_type_name": lt.get("NAME", "") if lt else "",
                     "leave_type_short": lt.get("SHORTNAME", "") if lt else "",
+                    # Teiltagsmodus (Spec 3.5.2/D-54): 0=ganz, 1=vorm., 2=nachm.,
+                    # 3=stundenweise (START/END Minuten ab Mitternacht)
+                    "interval": r.get("INTERVAL", 0) or 0,
+                    "start_time": r.get("START", 0) or 0,
+                    "end_time": r.get("END", 0) or 0,
                 }
             )
         result.sort(key=lambda x: x.get("date", ""))
