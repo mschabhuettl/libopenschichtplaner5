@@ -8,39 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.7.0] - 2026-06-11
 
 The calculation-layer release: a central `sp5lib.calculations` module implements
-the original's computation rules (spec chapter 3), the `SP5Database` facade is
-rewired onto it, writes are interoperable with a running original client
-(change journal + CDX strategy + byte parity), a golden regression suite runs
-against the original sample database, and the PostgreSQL backend reaches
-calculation parity with the DBF backend.
+the original's computation rules, the `SP5Database` facade is rewired onto it,
+writes are interoperable with a running original client (change journal + CDX
+strategy + byte parity), a golden regression suite runs against the original
+sample database, and the PostgreSQL backend reaches calculation parity with the
+DBF backend.
 
 ### Added
 
 - **`sp5lib.calculations`** — central, side-effect-free calculation layer
-  implementing the original's rules (spec chapter 3): nominal/actual hours with
+  implementing the original's computation rules: nominal/actual hours with
   the CALCBASE dispatcher (day/week/month/total basis), day-index-correct shift
   durations (`DURATION0..7`, holiday = index 7), 5SPSHI replacement, expanded
-  rotation cycles (5CYASS), absence crediting (3.5: CHARGETYP/CHARGEHRS/
-  COUNTALL, INTERVAL half days), account bookings (3.6), leave accounts and
-  forfeiture (3.7), surcharge windows (3.8: window intersection instead of
-  DURATION), personnel table (3.9.2/3.9.3) and demand/utilization (3.9.4).
+  rotation cycles (5CYASS), absence crediting (CHARGETYP/CHARGEHRS/COUNTALL,
+  INTERVAL half days), account bookings, leave accounts and forfeiture,
+  surcharge windows (window intersection instead of DURATION), personnel table
+  and demand/utilization.
 - `SP5Database` evaluation facades wired to the calculation layer:
-  `get_statistics` (month or free evaluation period, spec 3.9.1),
+  `get_statistics` (month or free evaluation period),
   `get_personnel_table`, `get_utilization`, `forfeit_rest`, leave balance per
   leave type, surcharges over a free period, expanded cycle duties in the
   schedule read path, and PACK via `compact_database` /
-  `dbf_writer.pack_table` (spec 1.14).
-- **Write interop with a running original client** (spec §2.7) in
-  `sp5lib.dbf_writer`:
+  `dbf_writer.pack_table`.
+- **Write interop with a running original client** in `sp5lib.dbf_writer`:
   - *Change journal:* every write appends a matching entry to the `-L`
-    companion table (composite keys per spec D-41) so original clients pick up
-    external changes (D-69/D-71/D-76). A missing or corrupt `-L` file degrades
-    to a warning and never blocks the data write.
+    companion table, with the composite keys the original format expects, so
+    running original clients pick up external changes. A missing or corrupt
+    `-L` file degrades to a warning and never blocks the data write.
   - *CDX strategy:* stale `.CDX` index files of a modified table are deleted
     after every successful write so the original rebuilds them instead of
-    reusing indexes that no longer match the table (D-13/D-14;
-    `INVALIDATE_CDX = False` opts out).
-  - Byte parity with the original file format (parity findings B1/B2, W1–W4).
+    reusing indexes that no longer match the table
+    (`INVALIDATE_CDX = False` opts out).
+  - Files written by the library are byte-for-byte compatible with the
+    original file format (header fields, encoding, EOF marker).
 - **Golden regression suite** (`tests/test_golden_sample_db.py`): runs the
   reader against the original Schichtplaner 5 sample database when
   `SP5_GOLDEN_DB=/path/to/Daten` is set (entire module skips otherwise). The
@@ -310,4 +310,10 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
+[1.7.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mschabhuettl/libopenschichtplaner5/releases/tag/v1.1.0
