@@ -5,6 +5,91 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-06-11
+
+The calculation-layer release: a central `sp5lib.calculations` module implements
+the original's computation rules (spec chapter 3), the `SP5Database` facade is
+rewired onto it, writes are interoperable with a running original client
+(change journal + CDX strategy + byte parity), a golden regression suite runs
+against the original sample database, and the PostgreSQL backend reaches
+calculation parity with the DBF backend.
+
+### Added
+
+- **`sp5lib.calculations`** — central, side-effect-free calculation layer
+  implementing the original's rules (spec chapter 3): nominal/actual hours with
+  the CALCBASE dispatcher (day/week/month/total basis), day-index-correct shift
+  durations (`DURATION0..7`, holiday = index 7), 5SPSHI replacement, expanded
+  rotation cycles (5CYASS), absence crediting (3.5: CHARGETYP/CHARGEHRS/
+  COUNTALL, INTERVAL half days), account bookings (3.6), leave accounts and
+  forfeiture (3.7), surcharge windows (3.8: window intersection instead of
+  DURATION), personnel table (3.9.2/3.9.3) and demand/utilization (3.9.4).
+- `SP5Database` evaluation facades wired to the calculation layer:
+  `get_statistics` (month or free evaluation period, spec 3.9.1),
+  `get_personnel_table`, `get_utilization`, `forfeit_rest`, leave balance per
+  leave type, surcharges over a free period, expanded cycle duties in the
+  schedule read path, and PACK via `compact_database` /
+  `dbf_writer.pack_table` (spec 1.14).
+- **Write interop with a running original client** (spec §2.7) in
+  `sp5lib.dbf_writer`:
+  - *Change journal:* every write appends a matching entry to the `-L`
+    companion table (composite keys per spec D-41) so original clients pick up
+    external changes (D-69/D-71/D-76). A missing or corrupt `-L` file degrades
+    to a warning and never blocks the data write.
+  - *CDX strategy:* stale `.CDX` index files of a modified table are deleted
+    after every successful write so the original rebuilds them instead of
+    reusing indexes that no longer match the table (D-13/D-14;
+    `INVALIDATE_CDX = False` opts out).
+  - Byte parity with the original file format (parity findings B1/B2, W1–W4).
+- **Golden regression suite** (`tests/test_golden_sample_db.py`): runs the
+  reader against the original Schichtplaner 5 sample database when
+  `SP5_GOLDEN_DB=/path/to/Daten` is set (entire module skips otherwise). The
+  reference DB stays local and is never committed; only non-personal master
+  data is asserted.
+- **PostgreSQL backend calculation parity**: `SP5PostgresDatabase` calls the
+  same `sp5lib.calculations` functions as `SP5Database` — `get_statistics`
+  (incl. free period), `get_personnel_table`, `get_utilization`,
+  `forfeit_rest`, `calculate_time_balance`, `get_zeitkonto`,
+  `get_employee_stats_year`/`_month`, `get_schedule_year`,
+  `calculate_extracharge_hours` (plus a read-only `get_extracharges` over the
+  5XCHAR mirror) and `get_leave_balance`(`_group`). Where possible the methods
+  are reused as the very same function objects over mirrored adapter helpers,
+  and `tests/test_pg_calculations.py` drives both backends with identical
+  fixture rows and asserts identical results. Annual close
+  (`run_annual_close`/`get_annual_close_preview`) raises `NotImplementedError`
+  on PG (the ORM mirror has no entitlement write facade yet). Documented
+  bridges: `HRSMONTH > 0` is computed as monthly base (the PG schema has no
+  CALCBASE column); cycle exceptions (5CYEXC) have no ORM mirror and are not
+  applied on PG.
+- Facade write features: part-day absences (INTERVAL/START/END), half holidays
+  and repeat-years (incl. PG parity) in `create`/`update_holiday`, the annual
+  close option `keep_entitlements`, granular 5USER permission flags, and
+  NOEXTRA passthrough in `create`/`update_shift`.
+
+### Fixed
+
+- Central DBF read-cache invalidation after all own writes — no more stale
+  reads after create/update/delete through the facade.
+- `append_record` refuses a record-size mismatch instead of silently
+  truncating the record.
+- A corrupt `-L` journal no longer blocks the main data write.
+- The UTF-16 heuristic in the reader now recognizes non-Latin scripts.
+- The cycle generator uses the correct day index (`DURATION0` = Monday).
+
+### Changed
+
+- Orphaned legacy helpers `_count_working_days` and
+  `_time_window_overlap_minutes` removed from `database.py` (replaced by the
+  calculation layer).
+- `pg_database.get_statistics` now returns the calculation-layer result shape
+  (adds `group_name`/`group_id`/`sick_days`, accepts `date_from`/`date_to`)
+  instead of the previous naive DURATION0 sums.
+
+### Notes
+
+- `sp5lib.sqlite_adapter` was audited for removal but is still used by the
+  API's SQLite export endpoint (`/api/backup/sqlite`) — it stays.
+
 ## [1.6.0] - 2026-05-27
 
 ORM Phase 6 — completes the read-only mirror with the demand, rotation-cycle

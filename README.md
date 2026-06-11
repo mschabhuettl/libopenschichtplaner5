@@ -17,13 +17,16 @@ data as the proprietary Windows tool, with no migration.
 | Module | Purpose |
 |---|---|
 | `sp5lib.dbf_reader` | Pure-Python DBF reader (UTF-16-LE detection, date parsing, field decode) |
-| `sp5lib.dbf_writer` | Safe DBF writer — exclusive `flock`, TOCTOU-safe record count, rollback, EOF marker preservation |
-| `sp5lib.database` | High-level `SP5Database` facade over the DBF tables (employees, shifts, schedule, absences, auth, 2FA …) |
-| `sp5lib.db_factory` / `sqlite_adapter` / `pg_database` | Optional SQLite / PostgreSQL backends |
+| `sp5lib.dbf_writer` | Safe DBF writer — exclusive `flock`, TOCTOU-safe record count, rollback, EOF marker preservation; interop with a running original client via the `-L` change journal and CDX invalidation (stale `.CDX` of a modified table is deleted so the original rebuilds it) |
+| `sp5lib.calculations` | Central, side-effect-free calculation layer implementing the original's rules (spec chapter 3): nominal/actual hours, absence crediting, leave accounts, surcharges, demand/utilization |
+| `sp5lib.database` | High-level `SP5Database` facade over the DBF tables (employees, shifts, schedule, absences, statistics via `sp5lib.calculations`, auth, 2FA …) |
+| `sp5lib.db_factory` / `sqlite_adapter` / `pg_database` | Optional SQLite / PostgreSQL backends; `pg_database` shares the calculation layer with the DBF facade (equivalence-tested) |
 | `sp5lib.orm` | SQLAlchemy models (`models.py` SQLite, `models_pg.py` Postgres), `repository`, `sync` |
 | `sp5lib.auto_migrate` | Alembic-based automatic migrations |
 | `sp5lib.email_service` | SMTP notification emails (HTML-escaped templates) |
 | `sp5lib.color_utils` | FoxPro BGR ↔ hex/RGB color helpers |
+
+See [docs/architecture.md](docs/architecture.md) for the full module map and wiring.
 
 ## Installation
 
@@ -66,6 +69,13 @@ python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,postgres]"
 pytest
 ruff check .
+```
+
+Optional golden regression suite against the original Schichtplaner 5 sample
+database (local reference material, never committed):
+
+```bash
+SP5_GOLDEN_DB=/path/to/sp5/Daten pytest tests/test_golden_sample_db.py -v
 ```
 
 ## License
