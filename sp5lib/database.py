@@ -19,11 +19,19 @@ from .dbf_writer import (
     _read_header_info as _dbf_header_info,
 )
 from .dbf_writer import (
-    append_record,
-    delete_record,
+    append_record as _dbf_append_record,
+)
+from .dbf_writer import (
+    delete_record as _dbf_delete_record,
+)
+from .dbf_writer import (
     find_all_records,
-    pack_table,
-    update_record,
+)
+from .dbf_writer import (
+    pack_table as _dbf_pack_table,
+)
+from .dbf_writer import (
+    update_record as _dbf_update_record,
 )
 
 _db_logger = logging.getLogger("sp5api")
@@ -35,6 +43,50 @@ _db_logger = logging.getLogger("sp5api")
 # from the same thread (e.g. write path calls _invalidate_cache then _read).
 _GLOBAL_DBF_CACHE: dict[tuple, tuple] = {}
 _CACHE_LOCK = threading.RLock()
+
+
+def _invalidate_cache_for_file(filepath: str) -> None:
+    """Globalen Cache-Eintrag der Tabelle von *filepath* verwerfen.
+
+    Zentrale Invalidierung für alle Schreibpfade: der mtime-Check in
+    ``_read()`` erkennt einen Write im selben Dateisystem-Zeittick nicht
+    (mtime unverändert) und würde dann veraltete Daten liefern. Der
+    Pfadvergleich normalisiert, weil ``db_path`` z. B. mit ``/`` enden kann.
+    """
+    target = os.path.normpath(filepath)
+    with _CACHE_LOCK:
+        stale = [
+            key
+            for key in _GLOBAL_DBF_CACHE
+            if os.path.normpath(os.path.join(key[0], f"5{key[1]}.DBF")) == target
+        ]
+        for key in stale:
+            _GLOBAL_DBF_CACHE.pop(key, None)
+
+
+# dbf_writer-Funktionen mit zentraler Cache-Invalidierung umhüllt, damit
+# JEDER Schreibpfad in dieser Datei den globalen DBF-Cache aktualisiert
+# (Repro: Write + sofortiger Read im selben mtime-Tick lieferte alte Daten).
+def append_record(filepath: str, fields: list[dict], record: dict) -> int:
+    result = _dbf_append_record(filepath, fields, record)
+    _invalidate_cache_for_file(filepath)
+    return result
+
+
+def update_record(filepath: str, fields: list[dict], record_index: int, data: dict) -> None:
+    _dbf_update_record(filepath, fields, record_index, data)
+    _invalidate_cache_for_file(filepath)
+
+
+def delete_record(filepath: str, fields: list[dict], record_index: int) -> None:
+    _dbf_delete_record(filepath, fields, record_index)
+    _invalidate_cache_for_file(filepath)
+
+
+def pack_table(filepath: str) -> int:
+    result = _dbf_pack_table(filepath)
+    _invalidate_cache_for_file(filepath)
+    return result
 
 
 class SP5Database:
