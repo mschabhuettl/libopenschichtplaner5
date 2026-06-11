@@ -535,3 +535,62 @@ def test_utilization_status():
     assert calc.utilization_status(1, 2, 4) == -1
     assert calc.utilization_status(3, 2, 4) == 0
     assert calc.utilization_status(5, 2, 4) == 1
+
+
+# ─── Randfälle (Phase-6-Review) ───────────────────────────────────────────────
+
+
+def test_leap_year_february():
+    # Februar 2024 (Schaltjahr): 29 Tage, Mo-Fr = 21 Arbeitstage
+    assert calc.count_working_days(EMP_DAY, date(2024, 2, 1), date(2024, 2, 29), NO_HOLIDAYS) == 21
+    # Monatsbasis: der Schaltmonat zählt als genau 1 voller Monat
+    emp = calc.EmployeeContext(workdays=MO_FR, calcbase=2, hrs_day=8.0, hrs_month=160.0)
+    assert calc.get_nominal_hours(
+        emp, date(2024, 2, 1), date(2024, 2, 29), holidays=NO_HOLIDAYS
+    ) == pytest.approx(160.0)
+    # 29.02. als Feiertag (Donnerstag) wird abgezogen
+    hol = calc.holiday_calendar([{"DATE": "2024-02-29", "INTERVAL": 0}])
+    assert calc.count_working_days(EMP_DAY, date(2024, 2, 1), date(2024, 2, 29), hol) == 20
+
+
+def test_empstart_after_empend_yields_zero():
+    """Invertierter Beschäftigungszeitraum (EMPSTART > EMPEND) klemmt alles auf 0."""
+    emp = calc.EmployeeContext(
+        workdays=MO_FR, calcbase=0, hrs_day=8.0,
+        emp_start=date(2024, 6, 1), emp_end=date(2024, 1, 1),
+    )
+    von, bis = date(2024, 1, 1), date(2024, 12, 31)
+    assert calc.count_working_days(emp, von, bis, NO_HOLIDAYS) == 0.0
+    assert calc.get_nominal_hours(emp, von, bis, holidays=NO_HOLIDAYS) == 0.0
+    assert calc.get_work_hours(
+        emp, von, bis, holidays=NO_HOLIDAYS, shifts_by_id=SHIFTS,
+        manual_shifts=[mashi("2024-03-04", 1)],
+    ) == 0.0
+
+
+def test_empty_workdays_mask():
+    """Leere WORKDAYS-Maske: alle Slots False, keine Arbeitstage, keine Anrechnung."""
+    emp = calc.EmployeeContext(workdays=calc.parse_day_mask("", 8), calcbase=0, hrs_day=8.0)
+    assert calc.count_working_days(emp, date(2024, 3, 1), date(2024, 3, 31), NO_HOLIDAYS) == 0.0
+    assert calc.absence_hours(
+        emp, {"DATE": "2024-03-04", "INTERVAL": 0}, UR, NO_HOLIDAYS
+    ) == 0.0
+
+
+def test_absence_interval3_across_midnight():
+    # 22:00-06:00 über Mitternacht (D-30: END <= START = Tageswechsel) → 8 h
+    rec = {"DATE": "2024-03-04", "LEAVETYPID": 1, "INTERVAL": 3, "START": 1320, "END": 360}
+    assert calc.absence_hours(EMP_DAY, rec, UR, NO_HOLIDAYS) == pytest.approx(8.0)
+    # degeneriert START == END == 0 → rechnerisch ganzer 24-h-Tag
+    rec0 = {"DATE": "2024-03-04", "LEAVETYPID": 1, "INTERVAL": 3, "START": 0, "END": 0}
+    assert calc.absence_hours(EMP_DAY, rec0, UR, NO_HOLIDAYS) == pytest.approx(24.0)
+
+
+def test_absence_interval3_half_holiday_clip():
+    """Halber Feiertag (INTERVAL=1 = Vormittag feiertags) bei freiem Ft-Slot:
+    die Teiltags-Abwesenheit zählt nur im nicht-feiertäglichen
+    Nachmittagsfenster 720-1440."""
+    hol = calc.holiday_calendar([{"DATE": "2024-03-04", "INTERVAL": 1}])
+    rec = {"DATE": "2024-03-04", "LEAVETYPID": 1, "INTERVAL": 3, "START": 600, "END": 840}
+    # 10:00-14:00 ∩ 12:00-24:00 = 2 h
+    assert calc.absence_hours(EMP_DAY, rec, UR, hol) == pytest.approx(2.0)
