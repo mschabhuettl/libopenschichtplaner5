@@ -173,6 +173,11 @@ class Employee(Base):
             "EMAIL": self.email or "",
             "PHONE": self.phone or "",
             "FUNCTION": self.function or "",
+            # Beschäftigungszeitraum: von der Berechnungsschicht zum Klemmen
+            # der Auswertungszeiträume benötigt (Spec 3.1 Nr. 8).
+            "BIRTHDAY": self.birthday or "",
+            "EMPSTART": self.empstart or "",
+            "EMPEND": self.empend or "",
         }
 
 

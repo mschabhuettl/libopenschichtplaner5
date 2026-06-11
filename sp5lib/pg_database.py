@@ -12,27 +12,37 @@ Usage:
 """
 
 import calendar
+import dataclasses
 import hashlib
 import json
 import logging
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import sessionmaker
 
+from . import calculations as calc
 from .color_utils import bgr_to_hex, is_light_color
 from .orm.base import Base
 from .orm.models import Employee, Group, GroupAssignment
 from .orm.models_pg import (
     Absence,
+    AccountBooking,
     ChangelogEntry,
+    Cycle,
+    CycleAssignment,
+    CycleEntry,
     Holiday,
+    LeaveEntitlement,
     LeaveType,
     Note,
+    OvertimeEntry,
     ScheduleEntry,
     Shift,
+    ShiftDemand,
+    SpecialDemand,
     SpecialShift,
     User,
     Workplace,
@@ -81,20 +91,129 @@ class SP5PostgresDatabase:
                 record[key + "_LIGHT"] = is_light_color(record[key])
         return record
 
-    def _count_working_days(self, year: int, month: int, workdays_list=None, holiday_dates=None) -> int:
-        num_days = calendar.monthrange(year, month)[1]
-        hd = holiday_dates or set()
-        if workdays_list and len(workdays_list) >= 7:
-            return sum(
-                1 for d in range(1, num_days + 1)
-                if workdays_list[datetime(year, month, d).weekday()]
-                and f"{year:04d}-{month:02d}-{d:02d}" not in hd
-            )
-        return sum(
-            1 for d in range(1, num_days + 1)
-            if datetime(year, month, d).weekday() < 5
-            and f"{year:04d}-{month:02d}-{d:02d}" not in hd
+    # ── Berechnungsschicht-Adapter (sp5lib.calculations, Spec Kap. 3) ──
+    # Dieselben calc-Aufrufe wie SP5Database (database.py); ORM-Zeilen werden
+    # über to_dict() in die DBF-Schlüsselform der Berechnungsschicht gebracht.
+
+    def _calc_holidays(self) -> dict[date, int]:
+        """Feiertags-Spiegel als date->INTERVAL-Kalender (wie SP5Database)."""
+        with self._session() as s:
+            rows = [h.to_dict() for h in s.scalars(select(Holiday)).all()]
+        return calc.holiday_calendar(rows)
+
+    @staticmethod
+    def _calc_context(emp: dict) -> calc.EmployeeContext:
+        """5EMPL-Berechnungsparameter aus dem ORM-Dict.
+
+        Das PG-Schema führt (noch) keine CALCBASE/HRSTOTAL/DEDUCTHOL-Spalten.
+        Brücke: HRSMONTH > 0 wird als Monatsbasis (CALCBASE=2) gerechnet —
+        das erhält die bisherige PG-Semantik ("HRSMONTH dominiert"), jetzt
+        mit korrekter Monats-Zerlegung (Spec 3.3.4); sonst Tagesbasis.
+        """
+        from .database import SP5Database
+
+        ctx = SP5Database._calc_context(emp)
+        if "CALCBASE" not in emp and ctx.hrs_month > calc.EPSILON:
+            ctx = dataclasses.replace(ctx, calcbase=2)
+        return ctx
+
+    def _movement_by_employee(
+        self, model, von: date, bis: date, employee_id: int | None = None
+    ) -> dict[int, list[dict]]:
+        """Bewegungsdaten (date-Spalte) je Mitarbeiter im Zeitraum [von, bis]."""
+        lo, hi = von.isoformat(), bis.isoformat()
+        out: dict[int, list[dict]] = {}
+        with self._session() as s:
+            stmt = select(model).where(model.date >= lo, model.date <= hi)
+            if employee_id is not None:
+                stmt = stmt.where(model.employee_id == employee_id)
+            for r in s.scalars(stmt).all():
+                out.setdefault(r.employee_id, []).append(r.to_dict())
+        return out
+
+    def _cycle_shifts_by_employee(
+        self, von: date, bis: date, employee_id: int | None = None
+    ) -> dict[int, list[dict]]:
+        """Expandierte Zyklusdienste je Mitarbeiter (wie SP5Database).
+
+        Tage mit eigenem schedule_entries-Satz werden übersprungen (Schutz
+        gegen Doppelzählung materialisierter Pläne). 5CYEXC hat im ORM-Spiegel
+        keine Tabelle; Ausnahmen entfallen daher im PG-Pfad.
+        """
+        with self._session() as s:
+            stmt = select(CycleAssignment)
+            if employee_id is not None:
+                stmt = stmt.where(CycleAssignment.employee_id == employee_id)
+            assignments = []
+            for a in s.scalars(stmt).all():
+                rec = a.to_dict()
+                entrance = str(rec.get("ENTRANCE") or "").strip()
+                # defensiv: Altbestand mit Nicht-Zahl im Feld → Einstieg 0
+                rec["ENTRANCE"] = int(entrance) if entrance.lstrip("-").isdigit() else 0
+                assignments.append(rec)
+            if not assignments:
+                return {}
+            cycles = [c.to_dict() for c in s.scalars(select(Cycle)).all()]
+            entries = [
+                {
+                    "CYCLEEID": e.cycle_id,
+                    "INDEX": e.index,
+                    "SHIFTID": e.shift_id,
+                    "WORKPLACID": e.workplace_id,
+                }
+                for e in s.scalars(select(CycleEntry)).all()
+            ]
+            mashi_days = {
+                (r.employee_id, r.date[:10])
+                for r in s.scalars(select(ScheduleEntry)).all()
+            }
+        expanded = calc.expand_cycle_assignments(
+            assignments, cycles=cycles, cycle_entries=entries, von=von, bis=bis
         )
+        out: dict[int, list[dict]] = {}
+        for rec in expanded:
+            if (rec["EMPLOYEEID"], rec["DATE"]) in mashi_days:
+                continue
+            out.setdefault(rec["EMPLOYEEID"], []).append(rec)
+        return out
+
+    def _calc_inputs(
+        self, von: date, bis: date, employee_id: int | None = None
+    ) -> dict:
+        """Gemeinsame Eingaben der Berechnungsschicht für [von, bis].
+
+        Plan-Quellen mit einem Tag Vorlauf wie in SP5Database (Spec 3.4.3
+        Nr. 8, Tageswechsel-Fenster des Vortags).
+        """
+        margin = von - timedelta(days=1)
+        return {
+            "holidays": self._calc_holidays(),
+            "shifts_by_id": {s["ID"]: s for s in self.get_shifts(include_hidden=True)},
+            "leave_types_by_id": {
+                lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)
+            },
+            "manual": self._movement_by_employee(ScheduleEntry, margin, bis, employee_id),
+            "special": self._movement_by_employee(SpecialShift, margin, bis, employee_id),
+            "cycle": self._cycle_shifts_by_employee(margin, bis, employee_id),
+            "absences": self._movement_by_employee(Absence, von, bis, employee_id),
+            "bookings": self._movement_by_employee(AccountBooking, von, bis, employee_id),
+            "overtimes": self._movement_by_employee(OvertimeEntry, von, bis, employee_id),
+        }
+
+    @staticmethod
+    def _plan_kwargs(inputs: dict, employee_id: int) -> dict:
+        """Plan-Keyword-Argumente eines Mitarbeiters für die calc-Funktionen."""
+        return {
+            "holidays": inputs["holidays"],
+            "shifts_by_id": inputs["shifts_by_id"],
+            "manual_shifts": inputs["manual"].get(employee_id, ()),
+            "cycle_shifts": inputs["cycle"].get(employee_id, ()),
+            "special_shifts": inputs["special"].get(employee_id, ()),
+        }
+
+    @staticmethod
+    def _last_of_month(year: int, month: int) -> date:
+        return date(year, month, calendar.monthrange(year, month)[1])
 
     # ── Employees ──────────────────────────────────────────────
 
@@ -968,63 +1087,475 @@ class SP5PostgresDatabase:
             s.flush()
             return 1
 
-    # ── Statistics ─────────────────────────────────────────────
+    # ── Statistics (Berechnungsschicht, wie SP5Database) ──────
 
-    def get_statistics(self, year: int, month: int, group_id: int | None = None) -> list[dict]:
-        """Basic monthly statistics."""
+    def get_statistics(
+        self,
+        year: int | None = None,
+        month: int | None = None,
+        group_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Per-Mitarbeiter-Statistik für einen Monat oder freien Zeitraum.
+
+        Identische calc-Aufrufe wie SP5Database.get_statistics (Spec 3.3/3.4:
+        CALCBASE-Dispatcher, tagindex-korrekte Schichtstunden, 5SPSHI-
+        Ersetzung, expandierte Zyklusdienste, Abwesenheits-Anrechnung 3.5,
+        Konten 3.6). Zeitraum: ``year``+``month`` oder ``date_from``/
+        ``date_to`` (hat Vorrang, Spec 3.9.1).
+        """
+        if date_from is not None and date_to is not None:
+            von = date.fromisoformat(str(date_from))
+            bis = date.fromisoformat(str(date_to))
+            if von > bis:
+                raise ValueError("date_from muss <= date_to sein")
+        elif year is None or month is None:
+            raise ValueError("Entweder year+month oder date_from+date_to angeben")
+        else:
+            von = date(year, month, 1)
+            bis = self._last_of_month(year, month)
+
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
             member_ids = set(self.get_group_members(group_id))
             employees = [e for e in employees if e["ID"] in member_ids]
 
-        shifts_map = {sh["ID"]: sh for sh in self.get_shifts(include_hidden=True)}
-        lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
-        holiday_dates = self.get_holiday_dates(year)
-        prefix = f"{year:04d}-{month:02d}"
+        # Mitarbeiter → primäre Gruppe (wie SP5Database)
+        groups_all = self.get_groups()
+        emp_group: dict[int, str] = {}
+        emp_group_id: dict[int, int] = {}
+        all_gm = self.get_all_group_members()
+        for grp in groups_all:
+            gid = grp["ID"]
+            for mid in all_gm.get(gid, []):
+                if mid not in emp_group:
+                    emp_group[mid] = grp.get("NAME", "")
+                    emp_group_id[mid] = gid
 
-        shift_hours: dict[int, float] = {}
-        shifts_count: dict[int, int] = {}
-        absence_days: dict[int, int] = {}
-        vacation_used: dict[int, int] = {}
-
-        with self._session() as s:
-            # MASHI
-            for r in s.scalars(select(ScheduleEntry).where(ScheduleEntry.date.startswith(prefix))).all():
-                eid = r.employee_id
-                sid = r.shift_id
-                hrs = float(shifts_map.get(sid, {}).get("DURATION0", 0) or 0)
-                shift_hours[eid] = shift_hours.get(eid, 0.0) + hrs
-                shifts_count[eid] = shifts_count.get(eid, 0) + 1
-
-            # ABSEN
-            for r in s.scalars(select(Absence).where(Absence.date.startswith(prefix))).all():
-                eid = r.employee_id
-                absence_days[eid] = absence_days.get(eid, 0) + 1
-                lt = lt_map.get(r.leave_type_id)
-                if lt and lt.get("ENTITLED"):
-                    vacation_used[eid] = vacation_used.get(eid, 0) + 1
+        inputs = self._calc_inputs(von, bis)
+        lt_map = inputs["leave_types_by_id"]
+        lo, hi = von.isoformat(), bis.isoformat()
 
         result = []
         for emp in employees:
             eid = emp["ID"]
-            target = float(emp.get("HRSMONTH") or 0)
-            if target == 0:
-                emp_workdays = emp.get("WORKDAYS_LIST", [])
-                working_days = self._count_working_days(year, month, workdays_list=emp_workdays, holiday_dates=holiday_dates)
-                target = float(emp.get("HRSDAY") or 0) * working_days
-            actual = shift_hours.get(eid, 0.0)
-            result.append({
-                "employee_id": eid,
-                "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(", "),
-                "employee_short": emp.get("SHORTNAME", ""),
-                "target_hours": round(target, 2),
-                "actual_hours": round(actual, 2),
-                "shifts_count": shifts_count.get(eid, 0),
-                "absence_days": absence_days.get(eid, 0),
-                "overtime_hours": round(actual - target, 2),
-                "vacation_used": vacation_used.get(eid, 0),
-            })
+            ctx = self._calc_context(emp)
+            plan = self._plan_kwargs(inputs, eid)
+            absences = inputs["absences"].get(eid, [])
+            bookings = inputs["bookings"].get(eid, [])
+
+            target = calc.get_nominal_hours(
+                ctx, von, bis, holidays=inputs["holidays"], bookings=bookings
+            )
+            actual = calc.get_actual_hours(
+                ctx,
+                von,
+                bis,
+                absences=absences,
+                leave_types_by_id=lt_map,
+                bookings=bookings,
+                **plan,
+            )
+            shifts_count = sum(
+                1
+                for key in ("manual_shifts", "cycle_shifts", "special_shifts")
+                for r in plan[key]
+                if lo <= (r.get("DATE") or "") <= hi
+            )
+
+            abs_days = len(absences)
+            vac = sick = 0
+            for r in absences:
+                lt = lt_map.get(r.get("LEAVETYPID"))
+                if lt is None:
+                    continue
+                if lt.get("ENTITLED"):
+                    vac += 1
+                lt_name = (lt.get("NAME", "") or "").lower()
+                lt_short = (lt.get("SHORTNAME", "") or "").lower()
+                if any(
+                    kw in lt_name or kw in lt_short for kw in ["krank", "sick", "ku"]
+                ):
+                    sick += 1
+
+            result.append(
+                {
+                    "employee_id": eid,
+                    "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                        ", "
+                    ),
+                    "employee_short": emp.get("SHORTNAME", ""),
+                    "group_name": emp_group.get(eid, ""),
+                    "group_id": emp_group_id.get(eid, None),
+                    "target_hours": round(target, 2),
+                    "actual_hours": round(actual, 2),
+                    "shifts_count": shifts_count,
+                    "absence_days": abs_days,
+                    "overtime_hours": round(actual - target, 2),
+                    "vacation_used": vac,
+                    "sick_days": sick,
+                }
+            )
+
         return result
+
+    # ── Personaltabelle (Spec 3.9.2/3.9.3, wie SP5Database) ───
+    def get_personnel_table(
+        self, date_from: str, date_to: str, group_id: int | None = None
+    ) -> dict:
+        """Personaltabelle über einen freien Auswertungszeitraum (Spec 3.9).
+
+        Identische calc-Aufrufe wie SP5Database.get_personnel_table:
+        Standard-Spalten über calc.personnel_table_row, Einteilungen je
+        Schichtart (3.9.3 Nr. 4), Fehltage je Abwesenheitsart (Nr. 5) und
+        bei Ein-Jahres-Zeitraum der Doppelwert genommen/verbleibend (Nr. 6).
+        """
+        von = date.fromisoformat(str(date_from))
+        bis = date.fromisoformat(str(date_to))
+        if von > bis:
+            raise ValueError("date_from muss <= date_to sein")
+
+        employees = self.get_employees(include_hidden=False)
+        if group_id is not None:
+            member_ids = set(self.get_group_members(group_id))
+            employees = [e for e in employees if e["ID"] in member_ids]
+
+        inputs = self._calc_inputs(von, bis)
+        lt_map = inputs["leave_types_by_id"]
+        leave_types = list(lt_map.values())
+
+        one_year = von == date(von.year, 1, 1) and bis == date(von.year, 12, 31)
+        leaen_by_emp: dict[int, list[dict]] = {}
+        if one_year:
+            with self._session() as s:
+                for r in s.scalars(select(LeaveEntitlement)).all():
+                    leaen_by_emp.setdefault(r.employee_id, []).append(r.to_dict())
+
+        rows = []
+        for emp in employees:
+            eid = emp["ID"]
+            ctx = self._calc_context(emp)
+            plan = self._plan_kwargs(inputs, eid)
+            absences = inputs["absences"].get(eid, [])
+            bookings = inputs["bookings"].get(eid, [])
+
+            std = calc.personnel_table_row(
+                ctx,
+                von,
+                bis,
+                absences=absences,
+                leave_types_by_id=lt_map,
+                bookings=bookings,
+                **plan,
+            )
+            shift_counts = calc.shift_assignment_counts(
+                ctx,
+                von,
+                bis,
+                manual_shifts=plan["manual_shifts"],
+                cycle_shifts=plan["cycle_shifts"],
+            )
+            absence_days = calc.absence_days_by_type(
+                ctx,
+                von,
+                bis,
+                holidays=inputs["holidays"],
+                absences=absences,
+                leave_types_by_id=lt_map,
+            )
+            row = {
+                "employee_id": eid,
+                "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                    ", "
+                ),
+                "employee_short": emp.get("SHORTNAME", ""),
+                **{
+                    k: round(v, 2) if isinstance(v, float) else v
+                    for k, v in std.items()
+                },
+                "shift_counts": shift_counts,
+                "absence_days_by_type": {
+                    lt_id: round(days, 2) for lt_id, days in absence_days.items()
+                },
+            }
+            if one_year:
+                accounts = {}
+                for lt in leave_types:
+                    if not lt.get("ENTITLED"):
+                        continue
+                    acct = calc.leave_account(
+                        ctx,
+                        von.year,
+                        lt,
+                        holidays=inputs["holidays"],
+                        entitlements=leaen_by_emp.get(eid, []),
+                        absences=absences,
+                    )
+                    accounts[lt["ID"]] = {
+                        "taken": round(acct.taken, 2),
+                        "remaining": round(acct.remaining, 2),
+                    }
+                row["leave_accounts"] = accounts
+            rows.append(row)
+
+        return {
+            "date_from": von.isoformat(),
+            "date_to": bis.isoformat(),
+            "group_id": group_id,
+            "one_year": one_year,
+            "columns": {
+                "shifts": [
+                    {"id": s["ID"], "name": s.get("NAME", ""), "short": s.get("SHORTNAME", "")}
+                    for s in self.get_shifts(include_hidden=False)
+                ],
+                "leave_types": [
+                    {
+                        "id": lt["ID"],
+                        "name": lt.get("NAME", ""),
+                        "short": lt.get("SHORTNAME", ""),
+                        "entitled": bool(lt.get("ENTITLED")),
+                    }
+                    for lt in self.get_leave_types(include_hidden=False)
+                ],
+            },
+            "rows": rows,
+        }
+
+    # ── Personalauslastung (Spec 3.9.4, wie SP5Database) ──────
+    def get_utilization(
+        self, year: int, month: int, group_id: int | None = None
+    ) -> list[dict]:
+        """Personalauslastung gegen den Bedarf (Spec 3.9.4).
+
+        Identische calc-Aufrufe wie SP5Database.get_utilization: Wochenbedarf
+        (staffing_requirements) je Tagindex 0..7 über calc.demand_for_day,
+        Tagesbedarf (special_demands) überschreibt seine Zelle, Zellstatus
+        über calc.utilization_status, eingeteilt je MA höchstens einmal
+        (calc.count_assigned).
+        """
+        von = date(year, month, 1)
+        bis = self._last_of_month(year, month)
+        holidays = self._calc_holidays()
+
+        members_by_group = self.get_all_group_members()
+        group_ids = (
+            [group_id] if group_id is not None else sorted(members_by_group.keys())
+        )
+
+        with self._session() as s:
+            shdem_rows = [r.to_dict() for r in s.scalars(select(ShiftDemand)).all()]
+            spdem_rows = [r.to_dict() for r in s.scalars(select(SpecialDemand)).all()]
+
+        shdem_by_group: dict[int, list[dict]] = {}
+        shifts_by_group: dict[int, set[int]] = {}
+        for r in shdem_rows:
+            gid = r.get("GROUPID") or 0
+            shdem_by_group.setdefault(gid, []).append(r)
+            sid = int(r.get("SHIFTID") or 0)
+            if sid:
+                shifts_by_group.setdefault(gid, set()).add(sid)
+
+        spdem_by_cell: dict[tuple[int, str, int], dict] = {}
+        for r in spdem_rows:
+            gid = r.get("GROUPID") or 0
+            sid = int(r.get("SHIFTID") or 0)
+            d = r.get("DATE") or ""
+            if sid and d:
+                spdem_by_cell[(gid, d, sid)] = r
+
+        manual = self._movement_by_employee(ScheduleEntry, von, bis)
+        special = self._movement_by_employee(SpecialShift, von, bis)
+        cycle = self._cycle_shifts_by_employee(von, bis)
+        entries_by_emp: dict[int, list[dict]] = {}
+        for src in (manual, cycle, special):
+            for eid, recs in src.items():
+                entries_by_emp.setdefault(eid, []).extend(recs)
+
+        member_entries_by_group = {
+            gid: {
+                eid: entries_by_emp.get(eid, ())
+                for eid in members_by_group.get(gid, [])
+            }
+            for gid in group_ids
+        }
+        allowed_ids = (
+            set(members_by_group.get(group_id, [])) if group_id is not None else None
+        )
+
+        scheduled_by_day: dict[str, set[int]] = {}
+        for eid, recs in manual.items():
+            for r in recs:
+                scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+        for eid, recs in cycle.items():
+            for r in recs:
+                scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+        for eid, recs in special.items():
+            for r in recs:
+                if int(r.get("TYPE") or 0) == 0:
+                    scheduled_by_day.setdefault(r.get("DATE") or "", set()).add(eid)
+
+        result = []
+        num_days = calendar.monthrange(year, month)[1]
+        for day in range(1, num_days + 1):
+            d = date(year, month, day)
+            iso = d.isoformat()
+            cells = []
+            for gid in group_ids:
+                demands = shdem_by_group.get(gid, [])
+                member_entries = member_entries_by_group.get(gid, {})
+                shift_ids = set(shifts_by_group.get(gid, set()))
+                shift_ids.update(
+                    sid for (g, dd, sid) in spdem_by_cell if g == gid and dd == iso
+                )
+                for sid in sorted(shift_ids):
+                    spdem = spdem_by_cell.get((gid, iso, sid))
+                    if spdem is not None:
+                        mn, mx = int(spdem.get("MIN") or 0), int(spdem.get("MAX") or 0)
+                        source = "SPDEM"
+                    else:
+                        demand = calc.demand_for_day(
+                            demands, d, holidays=holidays, shift_id=sid
+                        )
+                        if demand is None:
+                            continue
+                        mn, mx = demand
+                        source = "SHDEM"
+                    assigned = calc.count_assigned(member_entries, d, [sid])
+                    st = calc.utilization_status(assigned, mn, mx)
+                    cells.append(
+                        {
+                            "group_id": gid,
+                            "shift_id": sid,
+                            "min": mn,
+                            "max": mx,
+                            "assigned": assigned,
+                            "status": {-1: "under", 0: "ok", 1: "over"}[st],
+                            "source": source,
+                        }
+                    )
+
+            if any(c["status"] == "under" for c in cells):
+                status = "under"
+            elif any(c["status"] == "over" for c in cells):
+                status = "over"
+            elif cells:
+                status = "ok"
+            else:
+                status = "none"
+
+            scheduled = scheduled_by_day.get(iso, set())
+            if allowed_ids is not None:
+                scheduled = scheduled & allowed_ids
+            result.append(
+                {
+                    "day": day,
+                    "date": iso,
+                    "scheduled_count": len(scheduled),
+                    "required_count": sum(c["min"] for c in cells) if cells else None,
+                    "required_min": sum(c["min"] for c in cells) if cells else None,
+                    "required_max": sum(c["max"] for c in cells) if cells else None,
+                    "status": status,
+                    "cells": cells,
+                }
+            )
+        return result
+
+    # ── Resturlaubs-Verfall (Spec 3.7.3, wie SP5Database) ─────
+    def forfeit_rest(
+        self,
+        cutoff_date: str,
+        group_id: int | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Resturlaub zum Stichtag verfallen lassen (Spec 3.7.3 / Dialog 5.17).
+
+        Identische calc-Aufrufe wie SP5Database.forfeit_rest
+        (calculations.forfeit_rest: REST nur kürzen, nie erhöhen; ENTITLEMNT
+        bleibt unberührt). ``dry_run=True`` liefert die Kürzungen als
+        Vorschau; sonst wird leave_entitlements.carry_forward aktualisiert.
+        """
+        cutoff = date.fromisoformat(str(cutoff_date))
+        year = cutoff.year
+
+        employees = self.get_employees(include_hidden=False)
+        if group_id is not None:
+            member_ids = set(self.get_group_members(group_id))
+            employees = [e for e in employees if e["ID"] in member_ids]
+
+        holidays = self._calc_holidays()
+        leave_types = self.get_leave_types(include_hidden=True)
+        lt_map = {lt["ID"]: lt for lt in leave_types}
+        with self._session() as s:
+            leaen_by_emp: dict[int, list[dict]] = {}
+            for r in s.scalars(select(LeaveEntitlement)).all():
+                leaen_by_emp.setdefault(r.employee_id, []).append(r.to_dict())
+            absen_by_emp: dict[int, list[dict]] = {}
+            for r in s.scalars(select(Absence)).all():
+                absen_by_emp.setdefault(r.employee_id, []).append(r.to_dict())
+
+        cuts = []
+        total_forfeited = 0.0
+        for emp in employees:
+            eid = emp["ID"]
+            ctx = self._calc_context(emp)
+            leaen_rows = leaen_by_emp.get(eid, [])
+            rows = calc.forfeit_rest(
+                ctx,
+                cutoff,
+                holidays=holidays,
+                leave_types=leave_types,
+                entitlements=leaen_rows,
+                absences=absen_by_emp.get(eid, []),
+            )
+            for row in rows:
+                lt_id = int(row["LEAVETYPID"])
+                old_rest = next(
+                    (
+                        float(r.get("REST") or 0.0)
+                        for r in leaen_rows
+                        if r.get("YEAR") == year and r.get("LEAVETYPID") == lt_id
+                    ),
+                    0.0,
+                )
+                new_rest = float(row["REST"])
+                if not dry_run:
+                    with self._session() as s:
+                        matches = s.scalars(
+                            select(LeaveEntitlement).where(
+                                LeaveEntitlement.employee_id == eid,
+                                LeaveEntitlement.year == year,
+                                LeaveEntitlement.leave_type_id == lt_id,
+                            )
+                        ).all()
+                        for rec in matches:
+                            rec.carry_forward = new_rest
+                lt = lt_map.get(lt_id)
+                total_forfeited += old_rest - new_rest
+                cuts.append(
+                    {
+                        "employee_id": eid,
+                        "employee_name": f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(
+                            ", "
+                        ),
+                        "leave_type_id": lt_id,
+                        "leave_type_name": lt.get("NAME", "") if lt else "",
+                        "year": year,
+                        "old_rest": old_rest,
+                        "new_rest": new_rest,
+                        "forfeited": round(old_rest - new_rest, 4),
+                    }
+                )
+
+        return {
+            "cutoff_date": cutoff.isoformat(),
+            "year": year,
+            "group_id": group_id,
+            "dry_run": dry_run,
+            "employees_processed": len(employees),
+            "cuts": cuts,
+            "total_forfeited": round(total_forfeited, 4),
+        }
 
     # ── Stats ──────────────────────────────────────────────────
 
