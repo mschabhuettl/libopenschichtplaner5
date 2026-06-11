@@ -196,6 +196,16 @@ def test_missing_journal_is_skipped(tmp_path):
     assert len(read_dbf(path)) == 1
 
 
+def test_corrupted_journal_does_not_fail_main_write(tmp_path):
+    """Repro: ein korruptes (abgeschnittenes) -L löste NACH dem bereits
+    erfolgten Hauptwrite einen ValueError aus — der Aufrufer hielt den Write
+    für gescheitert. Jetzt: wie bei fehlendem -L überspringen (Warnung)."""
+    path = _make_table(tmp_path, "5MASHI", MASHI_SPEC, with_journal=False)
+    (tmp_path / "5MASHI-L.DBF").write_bytes(b"\x03\x00")  # abgeschnittener Header
+    append_record(path, get_table_fields(path), {"ID": 1, "EMPLOYEEID": 2})
+    assert len(read_dbf(path)) == 1  # Hauptwrite intakt, kein Raise
+
+
 # ─── W4: CDX invalidation ─────────────────────────────────────────────────────
 
 

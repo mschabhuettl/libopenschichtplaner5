@@ -344,8 +344,19 @@ def _append_journal(filepath: str, record: dict, change: int) -> None:
         "CHANGEID3": ids[2],
         "CHANGE": change,
     }
-    # append_record on a -L file does not journal again (guard via _is_journal_file)
-    append_record(jpath, get_table_fields(jpath), journal_record)
+    # append_record on a -L file does not journal again (guard via _is_journal_file).
+    # A corrupted or unwritable -L file is treated like a missing one (warn +
+    # skip): the main write has already succeeded at this point, and raising
+    # here would make the caller believe it failed.
+    try:
+        append_record(jpath, get_table_fields(jpath), journal_record)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "DBF change journal %s not writable (%s) — entry skipped "
+            "(running original clients will not see this change)",
+            jpath,
+            exc,
+        )
 
 
 def _after_write(filepath: str, record: dict, change: int) -> None:
