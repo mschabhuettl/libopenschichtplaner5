@@ -3485,6 +3485,9 @@ class SP5Database:
             and data["STARTEND0"] is not None
         ):
             record["STARTEND0"] = data["STARTEND0"]
+        # R5.5-15: keine Arbeitszeitzuschläge berechnen
+        if "NOEXTRA" in field_names and "NOEXTRA" in data and data["NOEXTRA"] is not None:
+            record["NOEXTRA"] = 1 if data["NOEXTRA"] else 0
         append_record(filepath, fields, record)
         self._invalidate_cache("SHIFT")
         return {**record, "id": new_id}
@@ -3519,6 +3522,9 @@ class SP5Database:
                 update_data[dk] = data[dk]
             if sk in data and sk in field_names:
                 update_data[sk] = data[sk]
+        # R5.5-15: keine Arbeitszeitzuschläge berechnen
+        if "NOEXTRA" in data and "NOEXTRA" in field_names:
+            update_data["NOEXTRA"] = 1 if data["NOEXTRA"] else 0
         update_record(filepath, fields, raw_idx, update_data)
         self._invalidate_cache("SHIFT")
         return {"id": shift_id, **update_data}
