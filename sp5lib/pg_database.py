@@ -553,14 +553,38 @@ class SP5PostgresDatabase:
     def get_holiday_dates(self, year: int) -> set:
         return {r["DATE"] for r in self.get_holidays(year) if r.get("DATE")}
 
-    def create_holiday(self, data: dict) -> dict:
+    def create_holiday(self, data: dict, repeat_years: int = 0) -> dict:
+        from datetime import datetime as _dt
+
+        from .database import SP5Database
+
+        interval = SP5Database._validate_holiday_interval(data.get("INTERVAL", 0))
         with self._session() as s:
-            h = Holiday(date=data.get("DATE", ""), name=data.get("NAME", ""), interval=data.get("INTERVAL", 0))
+            h = Holiday(date=data.get("DATE", ""), name=data.get("NAME", ""), interval=interval)
             s.add(h)
             s.flush()
-            return {**h.to_dict(), "id": h.id}
+            repeated_ids: list[int] = []
+            if repeat_years > 0:
+                base = _dt.strptime(h.date, "%Y-%m-%d").date()
+                for offset in range(1, repeat_years + 1):
+                    try:
+                        d = base.replace(year=base.year + offset)
+                    except ValueError:  # 29.02. in Nicht-Schaltjahr
+                        continue
+                    extra = Holiday(date=d.isoformat(), name=h.name, interval=interval)
+                    s.add(extra)
+                    s.flush()
+                    repeated_ids.append(extra.id)
+            result = {**h.to_dict(), "id": h.id}
+            if repeated_ids:
+                result["repeated_ids"] = repeated_ids
+            return result
 
     def update_holiday(self, holiday_id: int, data: dict) -> dict:
+        from .database import SP5Database
+
+        if "INTERVAL" in data:
+            data = {**data, "INTERVAL": SP5Database._validate_holiday_interval(data["INTERVAL"])}
         with self._session() as s:
             h = s.get(Holiday, holiday_id)
             if h is None:
