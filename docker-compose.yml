@@ -1,7 +1,23 @@
-# Build-/Test-Compose — die Library hat keinen Runtime-Service.
-# Verwendung: docker compose run --rm test
+# CLI-Tools + Build-/Test-Compose.
+#
+#   SP5_DB_DIR=/pfad/zu/SP5/Daten docker compose run --rm tools info /data
+#   docker compose run --rm tools dump /data 5EMPL --limit 5
+#   docker compose run --rm test          # ruff + pytest
 services:
+  tools:
+    build:
+      context: .
+      target: cli
+    image: libopenschichtplaner5
+    volumes:
+      # DBF-Daten: Host-Pfad via SP5_DB_DIR, sonst (leeres) Named Volume
+      - ${SP5_DB_DIR:-sp5_dbf}:/data:ro
+    command: ["info", "/data"]
+
   test:
     build:
       context: .
       target: test
+
+volumes:
+  sp5_dbf:

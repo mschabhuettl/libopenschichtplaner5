@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`sp5lib`-CLI** (`sp5lib.cli`, console script): standalone tools for a
+  Schichtplaner5 database directory — `info` (records per table, SP5 build),
+  `dump` (table as JSON/CSV, `--limit`), `validate` (reads all tables, reports
+  errors and encoding issues via exit code) and `sync` (DBF → SQLite/PostgreSQL
+  via `sp5lib.orm.sync`).
+- Dockerfile default stage `cli`: slim non-root image with
+  `ENTRYPOINT ["sp5lib"]`; compose service `tools` for ad-hoc CLI runs.
+
 ## [1.7.0] - 2026-06-11
 
 The calculation-layer release: a central `sp5lib.calculations` module implements
@@ -310,6 +322,7 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.7.0...HEAD
 [1.7.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.4.0...v1.5.0

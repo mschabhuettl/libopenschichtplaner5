@@ -41,6 +41,9 @@ dev = [
     "ruff>=0.1.0",
 ]
 
+[project.scripts]
+sp5lib = "sp5lib.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/mschabhuettl/libopenschichtplaner5"
 Source = "https://github.com/mschabhuettl/libopenschichtplaner5"

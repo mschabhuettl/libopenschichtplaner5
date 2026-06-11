@@ -57,6 +57,33 @@ fields = get_table_fields("/path/to/SP5/Daten/5EMPL.DBF")
 append_record("/path/to/SP5/Daten/5NOTE.DBF", fields, {"ID": 1, "TEXT": "hello"})
 ```
 
+## CLI & Docker
+
+The package installs an `sp5lib` command for standalone work on a Schichtplaner5
+database directory (the folder containing the `5*.DBF` files):
+
+```bash
+sp5lib info     /path/to/SP5/Daten                  # table overview: records per table, SP5 build
+sp5lib dump     /path/to/SP5/Daten 5EMPL --limit 5  # table contents as JSON (default) or --csv
+sp5lib validate /path/to/SP5/Daten                  # read all tables, report errors/encoding issues
+sp5lib sync     /path/to/SP5/Daten --target sqlite:/tmp/sp5.db        # DBF → SQLite
+sp5lib sync     /path/to/SP5/Daten --target postgres://user:pw@host/db  # DBF → PostgreSQL
+```
+
+The same CLI is the default stage of the Dockerfile (slim, non-root,
+`ENTRYPOINT ["sp5lib"]`) — no local Python required:
+
+```bash
+docker build -t libopenschichtplaner5 .
+docker run --rm -v /path/to/SP5/Daten:/data:ro libopenschichtplaner5 info /data
+docker run --rm -v /path/to/SP5/Daten:/data:ro libopenschichtplaner5 dump /data 5EMPL --limit 5
+docker run --rm -v /path/to/SP5/Daten:/data -v "$PWD":/out \
+  libopenschichtplaner5 sync /data --target sqlite:/out/sp5.db
+
+# or via compose (service "tools"):
+SP5_DB_DIR=/path/to/SP5/Daten docker compose run --rm tools info /data
+```
+
 ## Dependencies
 
 Runtime: `SQLAlchemy`, `alembic`, `bcrypt`, `pyotp`, `packaging`.
@@ -78,11 +105,10 @@ database (local reference material, never committed):
 SP5_GOLDEN_DB=/path/to/sp5/Daten pytest tests/test_golden_sample_db.py -v
 ```
 
-### Docker (Build-/Test-Image)
+### Docker (Build-/Test-Stage)
 
-The library ships no runtime service — the Dockerfile only provides a
-reproducible lint + test environment (`python:3.12-slim`, stage `test` runs
-`ruff check .` and `pytest`):
+Stage `test` of the Dockerfile provides a reproducible lint + test environment
+(`python:3.12-slim`, runs `ruff check .` and `pytest`):
 
 ```bash
 docker compose run --rm test
