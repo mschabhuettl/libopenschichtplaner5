@@ -4257,13 +4257,17 @@ class SP5Database:
         return count
 
     # ── Annual Close ──────────────────────────────────────────
-    def _annual_close_employee(self, emp: dict, year: int) -> tuple[dict, list[dict]]:
+    def _annual_close_employee(
+        self, emp: dict, year: int, keep_entitlements: bool = False
+    ) -> tuple[dict, list[dict]]:
         """Jahresabschluss-Kennzahlen und 5LEAEN-Zeilen (year+1) eines MA.
 
         Spec 3.7.2 über calculations.annual_close: je Abwesenheitsart mit
         ENTITLED=1 (Übertrag nur bei CARRYFWD=1), restNeu = gesamt − verbraucht
         ohne Cap, ENTITLEMNT-Vorbelegung aus vorhandenem Folgejahres-Wert bzw.
         STDENTIT. Verbrauch nach 3.5.2/3.5.3 (Halbtage zählen 0,5).
+        ``keep_entitlements`` = Dialog-Option "Urlaubsansprüche bleiben im
+        Folgejahr gleich" (R6.8-4).
         """
         eid = emp["ID"]
         ctx = self._calc_context(emp)
@@ -4279,6 +4283,7 @@ class SP5Database:
             leave_types=leave_types,
             entitlements=leaen_rows,
             absences=absences,
+            keep_entitlements=keep_entitlements,
         )
         carried_by_type = {int(r["LEAVETYPID"]): float(r["REST"]) for r in new_rows}
 
@@ -4300,9 +4305,11 @@ class SP5Database:
             used += acct.taken
             remaining += acct.remaining
             lt_id = int(lt.get("ID") or 0)
-            if lt_id in carried_by_type:
+            if lt_id in carried_by_type and lt.get("CARRYFWD"):
                 carried += carried_by_type[lt_id]
-            else:  # ENTITLED ohne CARRYFWD: Rest verfällt (Spec 3.7.2)
+            else:  # ENTITLED ohne CARRYFWD: Rest verfällt (Spec 3.7.2) —
+                # auch mit keep_entitlements (dann steht die Art mit REST=0
+                # in den neuen Zeilen)
                 forfeited += max(0.0, acct.remaining)
 
         summary = {
@@ -4321,13 +4328,18 @@ class SP5Database:
         return summary, new_rows
 
     def get_annual_close_preview(
-        self, year: int, group_id: int | None = None, carry_forward_days: float = 10
+        self,
+        year: int,
+        group_id: int | None = None,
+        carry_forward_days: float = 10,
+        keep_entitlements: bool = False,
     ) -> dict:
         """Preview annual close without saving changes.
 
         ``carry_forward_days`` bleibt aus API-Kompatibilität erhalten, wird
         aber ignoriert: das Original überträgt ungedeckelt gesamt − verbraucht
-        je Art (Spec 3.7.2, kein Cap).
+        je Art (Spec 3.7.2, kein Cap). ``keep_entitlements`` = Dialog-Option
+        "Urlaubsansprüche bleiben im Folgejahr gleich" (R6.8-4).
         """
         employees = self.get_employees(include_hidden=False)
         if group_id is not None:
@@ -4339,7 +4351,9 @@ class SP5Database:
         total_forfeited = 0.0
 
         for emp in employees:
-            summary, _rows = self._annual_close_employee(emp, year)
+            summary, _rows = self._annual_close_employee(
+                emp, year, keep_entitlements=keep_entitlements
+            )
             total_carry += summary["proposed_carry_forward"]
             total_forfeited += summary["forfeited"]
             details.append(summary)
@@ -4371,7 +4385,11 @@ class SP5Database:
         return False
 
     def run_annual_close(
-        self, year: int, group_id: int | None = None, carry_forward_days: float = 10
+        self,
+        year: int,
+        group_id: int | None = None,
+        carry_forward_days: float = 10,
+        keep_entitlements: bool = False,
     ) -> dict:
         """
         Run annual close: write the 5LEAEN rows for year+1 per leave type.
@@ -4380,6 +4398,10 @@ class SP5Database:
         (kein Kollabieren auf LEAVETYPID=0), Übertrag nur bei CARRYFWD=1 und
         ungedeckelt (``carry_forward_days`` wird aus API-Kompatibilität
         akzeptiert, aber ignoriert), Float-Ansprüche bleiben erhalten.
+        ``keep_entitlements`` = Dialog-Option "Urlaubsansprüche bleiben im
+        Folgejahr gleich" (R6.8-4): ENTITLEMNT des abgeschlossenen Jahres wird
+        ins Folgejahr kopiert, und auch Arten ohne CARRYFWD werden (mit REST=0)
+        fortgeschrieben.
         Returns summary with { processed, total_carry_forward, total_forfeited, already_existed }.
         NOTE: Not fully atomic — partial failures may leave some employees processed and others not.
         """
@@ -4396,7 +4418,9 @@ class SP5Database:
 
         for emp in employees:
             eid = emp["ID"]
-            summary, new_rows = self._annual_close_employee(emp, year)
+            summary, new_rows = self._annual_close_employee(
+                emp, year, keep_entitlements=keep_entitlements
+            )
 
             for row in new_rows:
                 self.set_leave_entitlement(
