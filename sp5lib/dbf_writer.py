@@ -386,10 +386,18 @@ def append_record(filepath: str, fields: list[dict], record: dict) -> int:
 
     num_records, header_size, record_size = _read_header_info(filepath)
 
-    # Pad / trim to the exact record_size
+    # Record-Size-Mismatch: eine zu lange Zeile stillschweigend abzuschneiden
+    # würde Feldgrenzen verschieben und den Satz korrumpieren (falsche
+    # fields-Liste oder beschädigter Header) — ablehnen statt korrumpieren.
+    if len(row) > record_size:
+        raise ValueError(
+            f"Record size mismatch for {filepath}: encoded row is {len(row)} bytes, "
+            f"header says record_size={record_size} — fields list does not match the file"
+        )
+    # Shorter rows are padded (defensive for headers with trailing slack).
     if len(row) < record_size:
         row += b"\x20" * (record_size - len(row))
-    row_bytes: bytes = bytes(row[:record_size])
+    row_bytes: bytes = bytes(row)
 
     with _exclusive_open(filepath) as f:
         # Re-read the record count inside the lock to avoid TOCTOU race:

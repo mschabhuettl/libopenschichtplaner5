@@ -120,3 +120,34 @@ def test_append_read_roundtrip():
 
 def test_read_missing_file_returns_empty():
     assert read_dbf("/nonexistent/path/FAKE.DBF") == []
+
+
+# ─── record-size mismatch guard ───────────────────────────────────────────────
+
+
+def test_append_record_size_mismatch_raises():
+    """Repro: eine fields-Liste, die nicht zur Datei passt, erzeugte eine zu
+    lange Zeile, die stillschweigend abgeschnitten wurde (verschobene
+    Feldgrenzen = korrupter Satz). Jetzt: ValueError, Datei unverändert."""
+    path = _write_temp_dbf(SPEC)
+    try:
+        fields = get_table_fields(path)
+        wrong_fields = fields + [{"name": "EXTRA", "type": "C", "len": 10, "dec": 0}]
+        before = open(path, "rb").read()
+        with pytest.raises(ValueError, match="Record size mismatch"):
+            append_record(path, wrong_fields, {"ID": 1, "NAME": "X", "EXTRA": "y"})
+        assert open(path, "rb").read() == before  # nichts geschrieben
+    finally:
+        os.unlink(path)
+
+
+def test_append_record_into_empty_table():
+    """Randfall leere Tabelle: erster Append landet direkt hinter dem Header."""
+    path = _write_temp_dbf(SPEC)
+    try:
+        fields = get_table_fields(path)
+        assert append_record(path, fields, {"ID": 1, "NAME": "Erster"}) == 1
+        rows = read_dbf(path)
+        assert len(rows) == 1 and rows[0]["NAME"] == "Erster"
+    finally:
+        os.unlink(path)
