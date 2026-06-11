@@ -25,6 +25,7 @@ from sqlalchemy.orm import sessionmaker
 
 from . import calculations as calc
 from .color_utils import bgr_to_hex, is_light_color
+from .database import SP5Database
 from .orm.base import Base
 from .orm.models import Employee, Group, GroupAssignment
 from .orm.models_pg import (
@@ -34,6 +35,7 @@ from .orm.models_pg import (
     Cycle,
     CycleAssignment,
     CycleEntry,
+    ExtraCharge,
     Holiday,
     LeaveEntitlement,
     LeaveType,
@@ -110,8 +112,6 @@ class SP5PostgresDatabase:
         das erhält die bisherige PG-Semantik ("HRSMONTH dominiert"), jetzt
         mit korrekter Monats-Zerlegung (Spec 3.3.4); sonst Tagesbasis.
         """
-        from .database import SP5Database
-
         ctx = SP5Database._calc_context(emp)
         if "CALCBASE" not in emp and ctx.hrs_month > calc.EPSILON:
             ctx = dataclasses.replace(ctx, calcbase=2)
@@ -214,6 +214,23 @@ class SP5PostgresDatabase:
     @staticmethod
     def _last_of_month(year: int, month: int) -> date:
         return date(year, month, calendar.monthrange(year, month)[1])
+
+    # ── Geteilte Berechnungs-Fassaden (Code aus SP5Database) ──────────
+    # Diese database.py-Methoden greifen ausschließlich über die oben
+    # gespiegelten Adapter (_calc_inputs/_plan_kwargs/_calc_context/...) und
+    # Fassaden-Leser (get_employee/get_shifts/get_extracharges/...) auf die
+    # Daten zu — die Wiederverwendung derselben Funktionsobjekte hält beide
+    # Backends per Konstruktion äquivalent (geprüft in test_pg_calculations).
+    calculate_time_balance = SP5Database.calculate_time_balance
+    get_zeitkonto = SP5Database.get_zeitkonto
+    get_employee_stats_year = SP5Database.get_employee_stats_year
+    get_employee_stats_month = SP5Database.get_employee_stats_month
+    get_schedule_year = SP5Database.get_schedule_year
+    calculate_extracharge_hours = SP5Database.calculate_extracharge_hours
+    get_leave_balance_group = SP5Database.get_leave_balance_group
+    _is_night_shift = SP5Database._is_night_shift
+    _decode_startend = staticmethod(SP5Database._decode_startend)
+    _time_str_to_minutes = staticmethod(SP5Database._time_str_to_minutes)
 
     # ── Employees ──────────────────────────────────────────────
 
@@ -1556,6 +1573,139 @@ class SP5PostgresDatabase:
             "cuts": cuts,
             "total_forfeited": round(total_forfeited, 4),
         }
+
+    # ── Zuschlagsarten (5XCHAR-Spiegel, nur lesend) ───────────
+    def get_extracharges(self, include_hidden: bool = False) -> list[dict]:
+        """Zuschlagsarten in DBF-Schlüsselform (für calculate_extracharge_hours)."""
+        with self._session() as s:
+            stmt = select(ExtraCharge)
+            if not include_hidden:
+                stmt = stmt.where(ExtraCharge.hide == False)
+            result = [
+                {
+                    "ID": r.id,
+                    "NAME": r.name or "",
+                    "POSITION": r.position or 0,
+                    "START": r.start or 0,
+                    "END": r.end or 0,
+                    "VALIDITY": r.validity or 0,
+                    "VALIDDAYS": r.validdays or "",
+                    "HOLRULE": r.holrule or 0,
+                    "HIDE": 1 if r.hide else 0,
+                }
+                for r in s.scalars(stmt).all()
+            ]
+        result.sort(key=lambda x: x.get("POSITION", 0))
+        return result
+
+    # ── Urlaubskonto (Spec 3.7.1, wie SP5Database) ────────────
+    def get_leave_balance(self, employee_id: int, year: int) -> dict:
+        """Urlaubskonto: Anspruch + Übertrag − verbraucht = verbleibend.
+
+        Identische calc-Aufrufe wie SP5Database.get_leave_balance: je
+        anspruchsverbundener Art (ENTITLED=1) über calculations.leave_account
+        (Spec 3.7.1, Verbrauch nach 3.5.2/3.5.3 inkl. INTERVAL-Halbtagen) und
+        über die Arten summiert. Ohne 5LEAEN-Satz kein Default-Anspruch.
+        """
+        emp = self.get_employee(employee_id)
+        ctx = (
+            self._calc_context(emp)
+            if emp
+            else calc.EmployeeContext(workdays=(False,) * 8)
+        )
+        holidays = self._calc_holidays()
+        with self._session() as s:
+            leaen_rows = [
+                r.to_dict()
+                for r in s.scalars(
+                    select(LeaveEntitlement).where(
+                        LeaveEntitlement.employee_id == employee_id
+                    )
+                ).all()
+            ]
+            absences = [
+                r.to_dict()
+                for r in s.scalars(
+                    select(Absence).where(Absence.employee_id == employee_id)
+                ).all()
+            ]
+
+        total_entitlement = total_carry = used = 0.0
+        by_type = []
+        for lt in self.get_leave_types(include_hidden=True):
+            if not lt.get("ENTITLED"):
+                continue
+            acct = calc.leave_account(
+                ctx,
+                year,
+                lt,
+                holidays=holidays,
+                entitlements=leaen_rows,
+                absences=absences,
+            )
+            total_entitlement += acct.entitlement
+            total_carry += acct.rest
+            used += acct.taken
+            # Spec 3.9.3 Nr. 6: Doppelwert genommen/verbleibend je Art
+            by_type.append(
+                {
+                    "leave_type_id": lt["ID"],
+                    "leave_type_name": lt.get("NAME", ""),
+                    "leave_type_short": lt.get("SHORTNAME", ""),
+                    "entitlement": acct.entitlement,
+                    "carry_forward": acct.rest,
+                    "total": acct.total,
+                    "used": acct.taken,
+                    "remaining": acct.remaining,
+                }
+            )
+
+        remaining = total_entitlement + total_carry - used
+        forfeiture_date = f"{year}-12-31"
+
+        return {
+            "employee_id": employee_id,
+            "year": year,
+            "entitlement": total_entitlement,
+            "carry_forward": total_carry,
+            "total": total_entitlement + total_carry,
+            "used": used,
+            "remaining": remaining,
+            "by_type": by_type,
+            "forfeiture_date": forfeiture_date,
+            "has_custom_entitlement": any(
+                r.get("YEAR") == year for r in leaen_rows
+            ),
+        }
+
+    # ── Jahresabschluss: im PG-Backend nicht implementiert ────
+    def get_annual_close_preview(
+        self,
+        year: int,
+        group_id: int | None = None,
+        carry_forward_days: float = 10,
+        keep_entitlements: bool = False,
+    ) -> dict:
+        raise NotImplementedError(
+            "Jahresabschluss ist im PostgreSQL-Backend nicht implementiert: "
+            "die 5LEAEN-Fortschreibung je Art (Spec 3.7.2) braucht eine "
+            "Entitlement-Schreibfassade (set_leave_entitlement), die der "
+            "ORM-Spiegel noch nicht hat."
+        )
+
+    def run_annual_close(
+        self,
+        year: int,
+        group_id: int | None = None,
+        carry_forward_days: float = 10,
+        keep_entitlements: bool = False,
+    ) -> dict:
+        raise NotImplementedError(
+            "Jahresabschluss ist im PostgreSQL-Backend nicht implementiert: "
+            "die 5LEAEN-Fortschreibung je Art (Spec 3.7.2) braucht eine "
+            "Entitlement-Schreibfassade (set_leave_entitlement), die der "
+            "ORM-Spiegel noch nicht hat."
+        )
 
     # ── Stats ──────────────────────────────────────────────────
 

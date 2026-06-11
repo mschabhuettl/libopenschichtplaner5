@@ -27,6 +27,7 @@ from sp5lib.orm.models import (
     Holiday,
     LeaveEntitlement,
     LeaveType,
+    OvertimeEntry,
     ShiftAssignment,
     ShiftDemand,
     SpecialDemand,
@@ -35,7 +36,7 @@ from sp5lib.orm.models import (
 from sp5lib.orm.models import (
     Shift as OrmShift,
 )
-from sp5lib.orm.models_pg import CycleEntry
+from sp5lib.orm.models_pg import CycleEntry, ExtraCharge
 from sp5lib.pg_database import SP5PostgresDatabase
 
 # ─── gemeinsame Fixture-Zeilen (DBF-Schlüsselform) ────────────────────────────
@@ -109,6 +110,18 @@ ROWS = {
          "VALUE": 10.0, "NOTE": ""},
         {"ID": 2, "EMPLOYEEID": 1, "DATE": "2014-12-15", "TYPE": 1,
          "VALUE": 10.0, "NOTE": ""},
+        # Überstundenkonto-Buchung (TYPE=2): nicht im Saldo, nur informativ
+        {"ID": 3, "EMPLOYEEID": 1, "DATE": "2014-12-20", "TYPE": 2,
+         "VALUE": 5.0, "NOTE": ""},
+    ],
+    "5OVER": [
+        {"ID": 1, "EMPLOYEEID": 1, "DATE": "2014-12-10", "HOURS": 3.0},
+    ],
+    # Frühzuschlag: Fenster 06:00-12:00, alle Wochentage gültig
+    "5XCHAR": [
+        {"ID": 1, "NAME": "Frühzuschlag", "POSITION": 1, "START": 360,
+         "END": 720, "VALIDITY": 0, "VALIDDAYS": "1 1 1 1 1 1 1",
+         "HOLRULE": 0, "HIDE": 0},
     ],
     "5LEAEN": [
         {"ID": 1, "EMPLOYEEID": 1, "YEAR": 2014, "LEAVETYPID": 1,
@@ -174,6 +187,15 @@ _MAKERS = {
     "5BOOK": lambda r: AccountBooking(
         id=r["ID"], employee_id=r["EMPLOYEEID"], date=r["DATE"],
         booking_type=r["TYPE"], value=r["VALUE"], note=r["NOTE"],
+    ),
+    "5OVER": lambda r: OvertimeEntry(
+        id=r["ID"], employee_id=r["EMPLOYEEID"], date=r["DATE"],
+        hours=r["HOURS"],
+    ),
+    "5XCHAR": lambda r: ExtraCharge(
+        id=r["ID"], name=r["NAME"], position=r["POSITION"], start=r["START"],
+        end=r["END"], validity=r["VALIDITY"], validdays=r["VALIDDAYS"],
+        holrule=r["HOLRULE"], hide=bool(r["HIDE"]),
     ),
     "5LEAEN": lambda r: LeaveEntitlement(
         id=r["ID"], employee_id=r["EMPLOYEEID"], year=r["YEAR"],
@@ -306,3 +328,89 @@ def test_forfeit_rest_equivalent(both):
         assert leaen[0].carry_forward == pytest.approx(1.5)
     assert pg.forfeit_rest("2014-12-05")["cuts"] == []
     assert dbf.forfeit_rest("2014-12-05")["cuts"] == []
+
+
+def test_time_balance_equivalent(both):
+    dbf, pg = both
+    pg_tb = pg.calculate_time_balance(1, 2014)
+    assert pg_tb == dbf.calculate_time_balance(1, 2014)
+    dez = pg_tb["months"][11]
+    # 5OVER 10.12. (+3 h) und 5BOOK TYPE=2 (+5 h): nur informativ, nicht im Saldo
+    assert dez["overtime_adjustment"] == pytest.approx(3.0)
+    assert dez["booking_adjustment"] == pytest.approx(5.0)
+    assert dez["actual_hours"] == pytest.approx(48.0)  # wie Statistik-Anker
+    assert dez["saldo"] == pytest.approx(dez["actual_hours"] - dez["target_hours"])
+    assert pg_tb["total_overtime_account"] == pytest.approx(8.0)
+    # unbekannter Mitarbeiter: leeres Dict wie SP5Database
+    assert pg.calculate_time_balance(99, 2014) == dbf.calculate_time_balance(99, 2014) == {}
+
+
+def test_zeitkonto_equivalent(both):
+    dbf, pg = both
+    assert pg.get_zeitkonto(2014) == dbf.get_zeitkonto(2014)
+    assert pg.get_zeitkonto(2014, employee_id=1) == dbf.get_zeitkonto(2014, employee_id=1)
+    assert pg.get_zeitkonto(2014, group_id=1) == dbf.get_zeitkonto(2014, group_id=1)
+
+
+def test_employee_stats_equivalent(both):
+    dbf, pg = both
+    pg_year = pg.get_employee_stats_year(1, 2014)
+    assert pg_year == dbf.get_employee_stats_year(1, 2014)
+    dez = pg_year["months"][11]
+    assert dez["shifts_count"] == 7    # 5 × 5MASHI + 2 × 5SPSHI
+    assert dez["weekend_shifts"] == 2  # Sa 6.12. + Messe Sa 13.12.
+    assert dez["vacation_days"] == 2   # zwei Urlaubs-Sätze (Tageszählung je Record)
+    assert dez["night_shifts"] == 0
+    assert pg.get_employee_stats_month(1, 2014, 12) == \
+        dbf.get_employee_stats_month(1, 2014, 12)
+    assert pg.get_employee_stats_year(99, 2014) == \
+        dbf.get_employee_stats_year(99, 2014) == {}
+
+
+def test_schedule_year_equivalent(both):
+    dbf, pg = both
+    for eid in (1, 2, 3):
+        assert pg.get_schedule_year(2014, eid) == dbf.get_schedule_year(2014, eid)
+    dez = pg.get_schedule_year(2014, 1)[11]
+    assert dez["shifts"] == 7
+    assert dez["absences"] == 2
+    # reine Arbeitszeit (GetWorkHours): 6 (ersetzt) + 8 + 8 + 4 (Messe)
+    assert dez["actual_hours"] == pytest.approx(26.0)
+    assert dez["label_counts"]["T"] == 5
+
+
+def test_extracharge_equivalent(both):
+    dbf, pg = both
+    assert pg.calculate_extracharge_hours(2014, 12) == \
+        dbf.calculate_extracharge_hours(2014, 12)
+    pg_one = pg.calculate_extracharge_hours(2014, 12, employee_id=1)
+    assert pg_one == dbf.calculate_extracharge_hours(2014, 12, employee_id=1)
+    # Frühfenster 06-12: 1.12. (6 h, Abweichung), 8./15.12. (je 6 h), Messe 13.12. (4 h)
+    assert pg_one[0]["hours"] == pytest.approx(22.0)
+    assert pg_one[0]["shift_count"] == 4
+    assert pg.calculate_extracharge_hours(date_from="2014-12-01", date_to="2014-12-07") == \
+        dbf.calculate_extracharge_hours(date_from="2014-12-01", date_to="2014-12-07")
+
+
+def test_leave_balance_equivalent(both):
+    dbf, pg = both
+    bal = pg.get_leave_balance(1, 2014)
+    assert bal == dbf.get_leave_balance(1, 2014)
+    assert bal["entitlement"] == pytest.approx(30.0)
+    assert bal["carry_forward"] == pytest.approx(5.0)
+    assert bal["used"] == pytest.approx(1.5)
+    assert bal["remaining"] == pytest.approx(33.5)
+    assert bal["has_custom_entitlement"] is True
+    # MA 2 ohne 5LEAEN-Satz: kein Default-Anspruch (wie das Original)
+    bal2 = pg.get_leave_balance(2, 2014)
+    assert bal2 == dbf.get_leave_balance(2, 2014)
+    assert bal2["total"] == pytest.approx(0.0)
+    assert pg.get_leave_balance_group(2014, 1) == dbf.get_leave_balance_group(2014, 1)
+
+
+def test_annual_close_not_implemented(both):
+    _, pg = both
+    with pytest.raises(NotImplementedError):
+        pg.get_annual_close_preview(2014)
+    with pytest.raises(NotImplementedError):
+        pg.run_annual_close(2014)
