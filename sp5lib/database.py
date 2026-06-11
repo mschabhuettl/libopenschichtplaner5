@@ -3572,7 +3572,28 @@ class SP5Database:
         return 1
 
     # ── Write: Holidays ───────────────────────────────────────
-    def create_holiday(self, data: dict) -> dict:
+    @staticmethod
+    def _validate_holiday_interval(interval: int) -> int:
+        """Validiert 5HOLID.INTERVAL (Spec 3.2.1 Nr. 3).
+
+        0 = ganztägiger Feiertag; ≠ 0 = halber Feiertag mit Tageshälfte
+        1 → 0–720 Min. bzw. 2 → 720–1440 Min. (UNSICHER: Zuordnung
+        1=Vormittag/2=Nachmittag aus der Zuschlags-Disassembly plausibel,
+        datenseitig unbestätigt — Beispiel-DB enthält nur INTERVAL=0).
+        """
+        interval = int(interval or 0)
+        if interval not in (0, 1, 2):
+            raise ValueError(f"INTERVAL muss 0, 1 oder 2 sein (war {interval})")
+        return interval
+
+    def create_holiday(self, data: dict, repeat_years: int = 0) -> dict:
+        """Feiertag anlegen (5HOLID).
+
+        ``repeat_years`` = Option "auch in den Folgejahren" (Spec 3.2.1 Nr. 4 /
+        R5.16-5): legt zusätzlich Datumssätze mit gleichem Termin für die
+        nächsten ``repeat_years`` Jahre an (Original: 9).
+        """
+        interval = self._validate_holiday_interval(data.get("INTERVAL", 0))
         filepath = self._table("HOLID")
         fields = get_table_fields(filepath)
         new_id = self._next_id("HOLID")
@@ -3580,12 +3601,32 @@ class SP5Database:
             "ID": new_id,
             "DATE": data.get("DATE", ""),
             "NAME": data.get("NAME", ""),
-            "INTERVAL": data.get("INTERVAL", 0),
+            "INTERVAL": interval,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
+        repeated_ids: list[int] = []
+        if repeat_years > 0:
+            base = datetime.strptime(record["DATE"], "%Y-%m-%d").date()
+            next_id = new_id + 1
+            for offset in range(1, repeat_years + 1):
+                year = base.year + offset
+                try:
+                    d = base.replace(year=year)
+                except ValueError:  # 29.02. in Nicht-Schaltjahr
+                    continue
+                append_record(
+                    filepath,
+                    fields,
+                    {**record, "ID": next_id, "DATE": d.isoformat()},
+                )
+                repeated_ids.append(next_id)
+                next_id += 1
         self._invalidate_cache("HOLID")
-        return {**record, "id": new_id}
+        result = {**record, "id": new_id}
+        if repeated_ids:
+            result["repeated_ids"] = repeated_ids
+        return result
 
     def update_holiday(self, holiday_id: int, data: dict) -> dict:
         filepath = self._table("HOLID")
@@ -3597,6 +3638,10 @@ class SP5Database:
         for key in ("DATE", "NAME", "INTERVAL"):
             if key in data:
                 update_data[key] = data[key]
+        if "INTERVAL" in update_data:
+            update_data["INTERVAL"] = self._validate_holiday_interval(
+                update_data["INTERVAL"]
+            )
         update_record(filepath, fields, raw_idx, update_data)
         self._invalidate_cache("HOLID")
         return {"id": holiday_id, **update_data}
