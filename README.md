@@ -12,6 +12,11 @@ data as the proprietary Windows tool, with no migration.
 > package keeps its historical name **`sp5lib`** (like `pip install PyYAML` → `import yaml`).
 > This keeps OpenSchichtplaner5's imports unchanged after the extraction.
 
+**📚 Full documentation lives in the [project wiki](https://github.com/mschabhuettl/libopenschichtplaner5/wiki)** —
+DBF format notes, calculation features, the ORM guide and development setup.
+For a quick start see [Installation](#installation) and the [CLI](#cli--docker) below;
+the in-repo module map is in [docs/architecture.md](docs/architecture.md).
+
 ## What's inside
 
 | Module | Purpose |
@@ -30,10 +35,18 @@ See [docs/architecture.md](docs/architecture.md) for the full module map and wir
 
 ## Installation
 
+Releases are published to [PyPI](https://pypi.org/project/libopenschichtplaner5/):
+
+```bash
+pip install libopenschichtplaner5
+# with the optional PostgreSQL backend:
+pip install "libopenschichtplaner5[postgres]"
+```
+
+For the latest development state straight from Git:
+
 ```bash
 pip install "libopenschichtplaner5 @ git+https://github.com/mschabhuettl/libopenschichtplaner5.git"
-# with the optional PostgreSQL backend:
-pip install "libopenschichtplaner5[postgres] @ git+https://github.com/mschabhuettl/libopenschichtplaner5.git"
 ```
 
 ## Usage
