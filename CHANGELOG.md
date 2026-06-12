@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SP5Database.apply_absence_visibility(data, mode)`: wendet die dreiwertige
+  SHOWABS-Sichtbarkeit (Spec 9.5.2 Nr. 2.1, 9.2 Nr. 3, D-67) auf beliebig
+  verschachtelte Plan-Strukturen an — 0 = vollständig, 1 = anonymisiert
+  (5USETT-ANOA*-Ersatzdarstellung), 2 = Abwesenheiten ausgeblendet.
+- Benutzer-Dict (`_build_user_dict`) trägt jetzt `SHOWABS_MODE` (Rohwert 0/1/2);
+  `update_user`/`get_users` lesen/schreiben den dreiwertigen SHOWABS.
+
+### Fixed
+
+- `SHOWABS` wird nicht mehr fälschlich als Wahrheitswert mit invertierter
+  Polarität behandelt: Die Berechtigung „darf Abwesenheiten sehen" ist jetzt
+  korrekt `mode != 2` (0 = vollständig **und** 1 = anonymisiert sind sichtbar).
+
 ## [1.9.0] - 2026-06-12
 
 ### Added

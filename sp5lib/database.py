@@ -567,6 +567,66 @@ class SP5Database:
 
         return entries
 
+    # ── Absence visibility / anonymisation (Spec 9.5.2, 9.2 Nr. 3, D-67) ──
+    def _anon_display(self) -> dict:
+        """Ersatzdarstellung anonymisierter Abwesenheiten aus 5USETT (ANOA*)."""
+        u = self.get_usett()
+        return {
+            "name": u.get("ANOANAME") or "Abwesend",
+            "short": u.get("ANOASHORT") or "X",
+            "color_bk": bgr_to_hex(u.get("ANOACRBK", 16777215)),
+            "color_text": bgr_to_hex(u.get("ANOACRTXT", 0)),
+            "bold": bool(u.get("ANOABOLD")),
+        }
+
+    def apply_absence_visibility(self, data: Any, mode: int) -> Any:
+        """Wende die SHOWABS-Sichtbarkeit auf eine beliebig verschachtelte
+        Plan-Struktur an (Listen/Dicts mit Blatt-Einträgen ``{"kind": ...}``).
+
+        ``mode`` (5USER.SHOWABS, dreiwertig, Spec 9.5.2 Nr. 2.1):
+          0 = vollständig (unverändert),
+          1 = anonymisiert (Abwesenheits-Blätter erhalten die 5USETT-ANOA*-
+              Ersatzdarstellung, die echte Abwesenheitsart wird entfernt),
+          2 = gar nicht (Abwesenheits-Blätter werden entfernt → leeres Feld).
+        """
+        if mode == 0 or not data:
+            return data
+        anon = self._anon_display() if mode == 1 else None
+        return self._transform_absence(data, mode, anon)
+
+    _DROP = object()
+
+    def _transform_absence(self, node: Any, mode: int, anon: dict | None) -> Any:
+        if isinstance(node, list):
+            out = []
+            for item in node:
+                t = self._transform_absence(item, mode, anon)
+                if t is self._DROP:
+                    continue
+                out.append(t)
+            return out
+        if isinstance(node, dict):
+            if node.get("kind") == "absence":
+                if mode == 2:
+                    return self._DROP
+                return {
+                    **node,
+                    "display_name": anon["short"],
+                    "leave_name": anon["name"],
+                    "shift_name": "",
+                    "color_bk": anon["color_bk"],
+                    "color_text": anon["color_text"],
+                    "bold": anon["bold"],
+                    "leave_type_id": None,
+                    "anonymized": True,
+                }
+            out = {}
+            for k, v in node.items():
+                t = self._transform_absence(v, mode, anon)
+                out[k] = None if t is self._DROP else t
+            return out
+        return node
+
     # ── Users ──────────────────────────────────────────────────
     def _role_from_record(self, r: dict) -> str:
         if r.get("ADMIN"):
@@ -733,6 +793,11 @@ class SP5Database:
                     "WABSENCES": bool(r.get("WABSENCES")),
                     "WOVERTIMES": bool(r.get("WOVERTIMES")),
                     "BACKUP": bool(r.get("BACKUP")),
+                    # SHOWABS dreiwertig (Spec 9.5.2): 0=vollständig,
+                    # 1=anonymisiert, 2=gar nicht (Admin ⇒ immer 0)
+                    "SHOWABS": 0
+                    if bool(r.get("ADMIN"))
+                    else int(r.get("SHOWABS") or 0),
                     "role": self._role_from_record(r),
                 }
             )
@@ -846,6 +911,14 @@ class SP5Database:
             # Also store bcrypt hash in sidecar
             bcrypt_hash = self._hash_password_bcrypt(data["PASSWORD"])
             self._save_bcrypt_hash(user_id, bcrypt_hash)
+        if "SHOWABS" in data:
+            # dreiwertig (Spec 9.5.2 Nr. 2.1): 0=vollständig, 1=anonymisiert,
+            # 2=gar nicht — auf gültigen Bereich klemmen
+            try:
+                mode = int(data["SHOWABS"])
+            except (TypeError, ValueError):
+                mode = 0
+            update_data["SHOWABS"] = mode if mode in (0, 1, 2) else 0
 
         update_record(filepath, fields, raw_idx, update_data)
 
@@ -923,9 +996,12 @@ class SP5Database:
             "WACCEMWND": bool(r.get("WACCEMWND")) if not is_admin else True,
             "WACCGRWND": bool(r.get("WACCGRWND")) if not is_admin else True,
             "BACKUP": bool(r.get("BACKUP")) if not is_admin else True,
-            # SHOWABS ist dreiwertig (N 5, Spec 9.5.2 Nr. 2.1) — hier als
-            # Wahrheitswert; Admin sieht immer alles
-            "SHOWABS": bool(r.get("SHOWABS")) if not is_admin else True,
+            # SHOWABS ist dreiwertig (N 5, Spec 9.5.2 Nr. 2.1): 0=vollständig,
+            # 1=anonymisiert, 2=gar nicht. ``SHOWABS`` = „darf Abwesenheiten
+            # überhaupt sehen" (mode != 2), ``SHOWABS_MODE`` = der Rohwert.
+            # Admin sieht immer vollständig.
+            "SHOWABS": True if is_admin else (int(r.get("SHOWABS") or 0) != 2),
+            "SHOWABS_MODE": 0 if is_admin else int(r.get("SHOWABS") or 0),
             "SHOWNOTES": bool(r.get("SHOWNOTES")) if not is_admin else True,
             "SHOWSTATS": bool(r.get("SHOWSTATS")) if not is_admin else True,
             "ACCADMWND": is_admin,
@@ -959,10 +1035,14 @@ class SP5Database:
             return None
         if r.get("ADMIN"):
             return dict.fromkeys(self._USER_PERMISSION_FIELDS, True)
-        return {
+        perms = {
             key: bool(r.get(field))
             for key, field in self._USER_PERMISSION_FIELDS.items()
         }
+        # SHOWABS dreiwertig (Spec 9.5.2, D-67): „darf Abwesenheiten sehen"
+        # = mode != 2 (0=vollständig, 1=anonymisiert sind beide sichtbar).
+        perms["showabs"] = int(r.get("SHOWABS") or 0) != 2
+        return perms
 
     def verify_user_password(self, name: str, password: str) -> dict | None:
         """Verify username+password, return user dict (without hash) or None.
