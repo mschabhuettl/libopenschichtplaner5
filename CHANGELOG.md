@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default) only reports the planned changes in the step summary. The workflow
   refuses to release when the `[Unreleased]` section is missing or empty.
 - `RELEASING.md` documents the release flow.
+- Optional oracle test (`tests/test_oracle_calculations.py`, gated by
+  `SP5_GOLDEN_DB`): cross-checks `calculations.get_nominal_hours` against the
+  values the original program displays for the sample database.
 
 ## [1.8.0] - 2026-06-12
 
