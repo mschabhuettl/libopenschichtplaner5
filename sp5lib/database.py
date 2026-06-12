@@ -442,7 +442,11 @@ class SP5Database:
 
     # ── Schedule ───────────────────────────────────────────────
     def get_schedule(
-        self, year: int, month: int, group_id: int | None = None
+        self,
+        year: int,
+        month: int,
+        group_id: int | None = None,
+        plan: str = "ist",
     ) -> list[dict]:
         """
         Get schedule entries for a month.
@@ -453,6 +457,18 @@ class SP5Database:
         generierte Einträge mit ``"source": "cycle"``; materialisierte
         5MASHI-Tage und 5SPSHI-Arbeitszeitabweichungen (SHIFTID gesetzt,
         Spec 3.4.4 Nr. 12) gewinnen.
+
+        Soll-/Istplan (Spec 4.12, D-58): das 5MASHI-Feld ``TYPE`` kodiert
+        0=Istplan (Normaleintrag), 1=Sollplan (Zielvorgabe) — Dekompilat-belegt
+        (SP5V/SP5R-Renderer, Konstruktor-Default 0). Jeder reguläre Dienst trägt
+        ``schedule_type`` (0/1). ``plan`` wählt die Sicht:
+          "ist"  (Vorgabe) = nur Istplan (schedule_type != 1) + Sonderdienste
+                  + Abwesenheiten,
+          "soll" = nur Sollplan (schedule_type == 1) + Sonderdienste + Abwesenheiten,
+          "both" = alle regulären Dienste beider Pläne (2-/3-Zeilen-Ansicht).
+        Sonderdienste (5SPSHI) werden NICHT plan-gefiltert: ihr ``TYPE`` kodiert
+        (Spec D-53/3.4.4, UNSICHER) Sonderdienst vs. Arbeitszeitabweichung,
+        nicht Soll/Ist; sie erscheinen in jeder Sicht.
         """
         prefix = f"{year:04d}-{month:02d}"
         entries = []
@@ -469,6 +485,7 @@ class SP5Database:
                         "shift_id": r.get("SHIFTID"),
                         "workplace_id": r.get("WORKPLACID"),
                         "leave_type_id": None,
+                        "schedule_type": int(r.get("TYPE") or 0),
                     }
                 )
 
@@ -493,6 +510,8 @@ class SP5Database:
                         "shift_id": r.get("SHIFTID"),
                         "workplace_id": r.get("WORKPLACID"),
                         "leave_type_id": None,
+                        # Zyklusdienste sind Ist-Plan (geplante tatsächliche Dienste)
+                        "schedule_type": 0,
                     }
                 )
 
@@ -508,6 +527,10 @@ class SP5Database:
                         "shift_id": r.get("SHIFTID"),
                         "workplace_id": r.get("WORKPLACID"),
                         "leave_type_id": None,
+                        # 5SPSHI.TYPE kodiert NICHT Soll/Ist, sondern (Spec D-53/
+                        # 3.4.4, UNSICHER) echten Sonderdienst vs. Arbeitszeit-
+                        # abweichung → als spshi_type separat, nicht plan-gefiltert.
+                        "spshi_type": int(r.get("TYPE") or 0),
                         "custom_name": r.get("NAME", ""),
                         "custom_short": r.get("SHORTNAME", ""),
                         "color_bk": bgr_to_hex(r.get("COLORBK", 16777215))
@@ -559,6 +582,18 @@ class SP5Database:
                 e["display_name"] = e.get("custom_short", "")
                 e["color_bk"] = e.get("color_bk", "#FFFFFF")
                 e["color_text"] = e.get("color_text", "#000000")
+
+        # Soll-/Istplan-Filter (Spec 4.12): nur reguläre Dienste (kind=="shift",
+        # inkl. Zyklus) tragen schedule_type (0/1). Sonderdienste und Abwesen-
+        # heiten sind planart-neutral und bleiben in jeder Sicht sichtbar.
+        if plan in ("ist", "soll"):
+            want_soll = plan == "soll"
+            entries = [
+                e
+                for e in entries
+                if e.get("kind") != "shift"
+                or (int(e.get("schedule_type") or 0) == 1) == want_soll
+            ]
 
         # Filter by group
         if group_id is not None:
@@ -2901,18 +2936,30 @@ class SP5Database:
 
     # ── Write: add schedule entry ─────────────────────────────
     def add_schedule_entry(
-        self, employee_id: int, date_str: str, shift_id: int
+        self,
+        employee_id: int,
+        date_str: str,
+        shift_id: int,
+        schedule_type: int = 0,
     ) -> dict:
         """Write a new schedule entry to MASHI.
 
-        Raises ValueError if an entry for this employee+date already exists in MASHI.
-        Callers that want upsert semantics should call delete_schedule_entry first.
+        ``schedule_type`` (5MASHI.TYPE, Spec 4.12): 0=Istplan (Vorgabe),
+        1=Sollplan (Zielvorgabe). Soll- und Istplan-Eintrag dürfen am selben
+        Tag koexistieren (2-Zeilen-Ansicht); zwei Einträge derselben Planart
+        an einem Tag sind weiterhin ein Duplikat.
+
+        Raises ValueError if an entry of the same plan type for this
+        employee+date already exists in MASHI. Callers that want upsert
+        semantics should call delete_schedule_entry first.
         """
+        schedule_type = 1 if int(schedule_type or 0) == 1 else 0
         filepath = self._table("MASHI")
         fields = get_table_fields(filepath)
-        # Guard against duplicate entries (same employee + same date)
+        # Guard against duplicate entries (same employee + date + plan type)
         duplicates = find_all_records(
-            filepath, fields, EMPLOYEEID=employee_id, DATE=date_str
+            filepath, fields,
+            EMPLOYEEID=employee_id, DATE=date_str, TYPE=schedule_type,
         )
         if duplicates:
             raise ValueError(
@@ -2929,7 +2976,7 @@ class SP5Database:
             "DATE": date_str,
             "SHIFTID": shift_id,
             "WORKPLACID": 0,
-            "TYPE": 0,
+            "TYPE": schedule_type,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)

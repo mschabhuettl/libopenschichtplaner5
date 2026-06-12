@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Soll-/Istplan (Spec 4.12, D-58): `get_schedule(plan=…)` filtert reguläre
+  Dienste nach 5MASHI.TYPE — `ist` (Vorgabe, schedule_type≠1), `soll` (==1) oder
+  `both`; jeder Dienst trägt `schedule_type`. `add_schedule_entry(schedule_type=…)`
+  schreibt TYPE; Soll- und Ist-Eintrag dürfen am selben Tag koexistieren.
+  TYPE-Kodierung (0=Ist, 1=Soll) aus dem Dekompilat belegt; 5SPSHI.TYPE bleibt
+  davon getrennt (Sonderdienst vs. Arbeitszeitabweichung, D-53).
 - `SP5Database.apply_absence_visibility(data, mode)`: wendet die dreiwertige
   SHOWABS-Sichtbarkeit (Spec 9.5.2 Nr. 2.1, 9.2 Nr. 3, D-67) auf beliebig
   verschachtelte Plan-Strukturen an — 0 = vollständig, 1 = anonymisiert
