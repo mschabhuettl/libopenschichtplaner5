@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SP5Database.reorder(entity, ordered_ids)`: manuelle, programmweite Stammdaten-
+  Sortierung (Spec 5.1 Nr. 4) — vergibt POSITION 1..N in der gegebenen Reihenfolge
+  für `employees/shifts/groups/leave_types/workplaces`.
+
 ## [1.10.0] - 2026-06-12
 
 ### Added

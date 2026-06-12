@@ -3961,6 +3961,35 @@ class SP5Database:
         update_record(filepath, fields, raw_idx, {"HIDE": 1})
         return 1
 
+    # ── Manuelle Stammdaten-Sortierung (POSITION, Spec 5.1 Nr. 4) ──
+    #: Tabellen mit POSITION-Feld, die programmweit manuell sortierbar sind.
+    _REORDERABLE = {
+        "employees": "EMPL",
+        "shifts": "SHIFT",
+        "groups": "GROUP",
+        "leave_types": "LEAVT",
+        "workplaces": "WOPL",
+    }
+
+    def reorder(self, entity: str, ordered_ids: list[int]) -> int:
+        """Weise den Datensätzen einer Stammdaten-Tabelle POSITION 1..N in der
+        übergebenen Reihenfolge zu (manuelle, programmweite Sortierung, Spec 5.1
+        Nr. 4). ``entity`` ist einer von ``employees/shifts/groups/leave_types/
+        workplaces``. Returns Anzahl aktualisierter Sätze."""
+        table = self._REORDERABLE.get(entity)
+        if table is None:
+            raise ValueError(f"Unbekannte oder nicht sortierbare Entität: {entity}")
+        filepath = self._table(table)
+        fields = get_table_fields(filepath)
+        n = 0
+        for pos, rec_id in enumerate(ordered_ids, start=1):
+            for raw_idx, _ in find_all_records(filepath, fields, ID=int(rec_id)):
+                update_record(filepath, fields, raw_idx, {"POSITION": pos})
+                n += 1
+        if n:
+            self._invalidate_cache(table)
+        return n
+
     # ── Workplace ↔ Employee Assignments (sidecar JSON) ────────
     def _assignments_path(self) -> str:
         return os.path.join(self.db_path, "workplace_assignments.json")
