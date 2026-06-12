@@ -1397,9 +1397,10 @@ class SP5Database:
                     if eid is not None:
                         existing_entries.add((eid, d))
 
-        # Build restrictions lookup: (employee_id, shift_id, weekday) -> True
-        # weekday 0 = all days, 1-7 = Mon-Sun
+        # Build restrictions lookup: (employee_id, shift_id, weekday) -> True.
+        # WEEKDAY is the original day index (D-34): 0=Mon..6=Sun, 7=holiday.
         restrictions: set = set()  # (employee_id, shift_id, weekday)
+        restr_holidays = calc.holiday_calendar(self._read("HOLID"))
         if respect_restrictions:
             try:
                 for r in self._read("RESTR"):
@@ -1664,14 +1665,11 @@ class SP5Database:
                     # No shift defined for this position (Frei / day off) → skip
                     continue
 
-                # Check restrictions: weekday 0=all, 1=Mon...7=Sun (iso_weekday 1-7)
+                # Check restrictions: WEEKDAY is the day index 0=Mon..6=Sun,
+                # 7=holiday (D-34); calc.day_index maps the date accordingly.
                 if respect_restrictions and restrictions:
-                    iso_wd = target_date.isoweekday()  # 1=Mon, 7=Sun
-                    restricted = (emp_id, shift_id, 0) in restrictions or (
-                        emp_id,
-                        shift_id,
-                        iso_wd,
-                    ) in restrictions
+                    day_idx = calc.day_index(target_date, restr_holidays)
+                    restricted = (emp_id, shift_id, day_idx) in restrictions
                     if restricted:
                         skipped_restriction += 1
                         preview.append(
