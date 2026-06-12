@@ -42,12 +42,21 @@ Change journal (-L companion tables, Spec §2.7):
 CDX index files (Spec D-13/D-14):
   • SP5/CodeBase only recreates *missing* index files on open; an existing
     stale CDX would be reused and would no longer match the table after a
-    write from this module. Therefore the .CDX files of the modified table
+    write from this module. By DEFAULT the .CDX files of the modified table
     (main and -L) are DELETED after every successful write, which forces the
     original to rebuild them from its compiled-in tag definitions (D-14).
     Header byte 28 (MDX/CDX flag, 0x01 in all original files) is left
     untouched. Set INVALIDATE_CDX = False to opt out (only safe if the data
     is never opened by an original SP5 client again).
+  • OPTIONAL in-place CDX writer (ROADMAP §B.2): set WRITE_CDX = True (or env
+    SP5_CDX_WRITE=1) to instead REBUILD the .CDX in place after each write via
+    sp5lib.cdx_writer, so the original opens the table without rebuilding the
+    index. OFF by default; the delete-and-rebuild path above stays the proven
+    default. The writer reproduces the sample DB's CDX byte-for-byte for the
+    single-tag SP5 schema (numeric and composite-character keys, multi-page
+    B-trees) and falls back to deletion for any key shape it cannot build, so
+    enabling it is never worse than the default. No hook in database.py is
+    needed: the toggle and dispatch live entirely in this module.
 
 Write safety:
   • Exclusive fcntl.flock() around all write operations.
@@ -83,6 +92,16 @@ logger = logging.getLogger(__name__)
 #: Delete the .CDX files of a modified table after every successful write
 #: (see module docstring, "CDX index files"). Interop-safe default.
 INVALIDATE_CDX = True
+
+#: OPT-IN: rebuild the .CDX in place after a write instead of deleting it, so
+#: an original SP5/CodeBase client can open the table WITHOUT rebuilding the
+#: index (ROADMAP §B.2). OFF BY DEFAULT — the proven delete-and-let-original-
+#: rebuild path above stays the default. Enable via env SP5_CDX_WRITE=1 or by
+#: setting this flag True. When enabled, the new writer (sp5lib.cdx_writer) is
+#: used; if it cannot handle the table's key shape it falls back to deleting
+#: the stale CDX so behaviour is never worse than the default. See
+#: sp5lib/cdx_writer.py for the reproduced/verified scope and limits.
+WRITE_CDX = os.environ.get("SP5_CDX_WRITE", "") == "1"
 
 #: ASCII-class C fields (Spec D-20): plain cp1252, space-separated lists.
 #: STARTEND* (D-31) belongs to the same class. Name-based matching is exact
@@ -302,7 +321,28 @@ def _journal_path(filepath: str) -> str | None:
 
 
 def _invalidate_cdx(filepath: str) -> None:
-    """Delete the table's stale .CDX so the original rebuilds it (Spec D-14)."""
+    """Keep the table's .CDX consistent with the data after a write.
+
+    Default (interop-safe): DELETE the stale .CDX so the original rebuilds it on
+    next open (Spec D-14). Opt-in (``WRITE_CDX`` / env ``SP5_CDX_WRITE=1``):
+    rebuild the .CDX in place via :mod:`sp5lib.cdx_writer` so the original opens
+    the table without a rebuild. The optional writer falls back to deletion if
+    it cannot handle the table's key shape, so it is never worse than default.
+    """
+    if WRITE_CDX:
+        from . import cdx_writer
+
+        try:
+            if cdx_writer.write_cdx(filepath) is not None:
+                return  # rebuilt in place — done
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "CDX rebuild failed for %s (%s) — falling back to invalidation",
+                filepath,
+                exc,
+            )
+        # No CDX present or unsupported key — fall through to deletion.
+
     if not INVALIDATE_CDX:
         return
     base, _ = os.path.splitext(filepath)
