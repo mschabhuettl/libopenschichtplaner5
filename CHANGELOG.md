@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-06-12
+
 ### Added
 
 - `SP5Database.reorder(entity, ordered_ids)`: manuelle, programmweite Stammdaten-
@@ -396,7 +398,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.7.0...v1.8.0
