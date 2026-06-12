@@ -29,3 +29,36 @@ jobs:
 
       - name: Pytest
         run: pytest -v
+
+  pg-parity:
+    name: PG parity (postgres:16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install package + dev deps
+        run: pip install -e ".[dev,postgres]"
+
+      # DATABASE_URL routes the ORM mirror in the test suite to real
+      # PostgreSQL (see tests/conftest.py) instead of the SQLite stand-in.
+      - name: Pytest against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
+        run: pytest -v

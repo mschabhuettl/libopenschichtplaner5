@@ -2,7 +2,8 @@
 
 Dieselben Fixture-Zeilen (DBF-Schlüsselform wie in test_database_calculations)
 treiben beide Backends — die Mini-DBF-DB über make_db und den ORM-Spiegel über
-eine SQLite-Datei als PG-Stellvertreter. Die Fassaden get_statistics,
+die orm_url-Fixture (SQLite-Stellvertreter; echtes PostgreSQL bei gesetzter
+DATABASE_URL, siehe conftest). Die Fassaden get_statistics,
 get_personnel_table, get_utilization und forfeit_rest müssen identische
 Ergebnisse liefern, weil beide auf dieselben sp5lib.calculations-Funktionen
 verdrahtet sind.
@@ -227,8 +228,8 @@ _MAKERS = {
 }
 
 
-def make_pg(tmp_path, rows_by_table):
-    db = SP5PostgresDatabase(f"sqlite:///{tmp_path}/pg.sqlite")
+def make_pg(orm_url, rows_by_table):
+    db = SP5PostgresDatabase(orm_url)
     db.init_db()
     with db._session() as s:
         for table, rows in rows_by_table.items():
@@ -238,10 +239,12 @@ def make_pg(tmp_path, rows_by_table):
 
 
 @pytest.fixture
-def both(tmp_path):
+def both(tmp_path, orm_url):
     dbf_dir = tmp_path / "dbf"
     dbf_dir.mkdir()
-    return make_db(dbf_dir, ROWS), make_pg(tmp_path, ROWS)
+    pg = make_pg(orm_url, ROWS)
+    yield make_db(dbf_dir, ROWS), pg
+    pg._engine.dispose()
 
 
 # ─── Äquivalenztests ──────────────────────────────────────────────────────────

@@ -56,11 +56,12 @@ from sp5lib.orm.base import session_scope
 
 
 @pytest.fixture
-def engine():
-    """Fresh in-memory SQLite engine with all ORM tables created."""
-    eng = get_engine("sqlite:///:memory:")
+def engine(orm_url):
+    """Fresh engine (SQLite stand-in or DATABASE_URL) with all ORM tables created."""
+    eng = get_engine(orm_url)
     init_db(eng)
-    return eng
+    yield eng
+    eng.dispose()
 
 
 # ─── schema / importability ───────────────────────────────────────────────────
