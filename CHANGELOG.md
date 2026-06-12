@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SP5Database.eligible_replacements` and `calculations.is_eligible_replacement`:
+  replacement candidates filtered by group membership, employment period,
+  availability (not already assigned / not absent) and shift restriction.
+- Round-trip write tests covering every facade write path (movement and master
+  data), verifying value, change journal and index invalidation.
 - `prepare-release` workflow (manual dispatch): bumps the version
   (patch/minor/major or explicit), cuts the `[Unreleased]` changelog section
   into a release section, updates the compare links and pushes commit +
@@ -19,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional oracle test (`tests/test_oracle_calculations.py`, gated by
   `SP5_GOLDEN_DB`): cross-checks `calculations.get_nominal_hours` against the
   values the original program displays for the sample database.
+
+### Fixed
+
+- Shift restrictions now use the original day index (0=Mon..6=Sun, 7=holiday)
+  instead of "0=all, 1=Mon..7=Sun (ISO)" in the auto-scheduler.
 
 ## [1.8.0] - 2026-06-12
 
