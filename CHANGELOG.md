@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Arbeitsplatz im Dienstplan (Spec 6.4): `add_schedule_entry(workplace_id=…)` und
+  `set_schedule_workplace(...)` setzen 5MASHI.WORKPLACID; `get_schedule` reichert
+  `workplace_name` aus 5WOPL an.
 - Soll-/Istplan (Spec 4.12, D-58): `get_schedule(plan=…)` filtert reguläre
   Dienste nach 5MASHI.TYPE — `ist` (Vorgabe, schedule_type≠1), `soll` (==1) oder
   `both`; jeder Dienst trägt `schedule_type`. `add_schedule_entry(schedule_type=…)`

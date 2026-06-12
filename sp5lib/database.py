@@ -557,11 +557,16 @@ class SP5Database:
                     }
                 )
 
-        # Enrich with shift/leave-type data
+        # Enrich with shift/leave-type/workplace data
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
+        wp_map = {w["ID"]: w for w in self.get_workplaces(include_hidden=True)}
 
         for e in entries:
+            wp_id = e.get("workplace_id")
+            e["workplace_name"] = (
+                wp_map[wp_id].get("NAME", "") if wp_id and wp_id in wp_map else ""
+            )
             if e["shift_id"] and e["shift_id"] in shifts_map:
                 s = shifts_map[e["shift_id"]]
                 e["display_name"] = s.get("SHORTNAME", s.get("NAME", ""))
@@ -2941,13 +2946,15 @@ class SP5Database:
         date_str: str,
         shift_id: int,
         schedule_type: int = 0,
+        workplace_id: int = 0,
     ) -> dict:
         """Write a new schedule entry to MASHI.
 
         ``schedule_type`` (5MASHI.TYPE, Spec 4.12): 0=Istplan (Vorgabe),
         1=Sollplan (Zielvorgabe). Soll- und Istplan-Eintrag dürfen am selben
         Tag koexistieren (2-Zeilen-Ansicht); zwei Einträge derselben Planart
-        an einem Tag sind weiterhin ein Duplikat.
+        an einem Tag sind weiterhin ein Duplikat. ``workplace_id`` setzt den
+        Arbeitsplatz (5MASHI.WORKPLACID, Spec 6.4; 0 = keiner).
 
         Raises ValueError if an entry of the same plan type for this
         employee+date already exists in MASHI. Callers that want upsert
@@ -2975,13 +2982,37 @@ class SP5Database:
             "EMPLOYEEID": employee_id,
             "DATE": date_str,
             "SHIFTID": shift_id,
-            "WORKPLACID": 0,
+            "WORKPLACID": int(workplace_id or 0),
             "TYPE": schedule_type,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
         self._invalidate_cache("MASHI")
         return record
+
+    def set_schedule_workplace(
+        self,
+        employee_id: int,
+        date_str: str,
+        workplace_id: int,
+        schedule_type: int = 0,
+    ) -> int:
+        """Setze den Arbeitsplatz (5MASHI.WORKPLACID) eines bestehenden
+        Dienstplan-Eintrags (Spec 6.4). ``workplace_id=0`` entfernt die Zuordnung.
+        Wählt den Eintrag der angegebenen Planart (TYPE). Returns Anzahl
+        aktualisierter Sätze (0 wenn kein passender Eintrag existiert)."""
+        schedule_type = 1 if int(schedule_type or 0) == 1 else 0
+        filepath = self._table("MASHI")
+        fields = get_table_fields(filepath)
+        matches = find_all_records(
+            filepath, fields,
+            EMPLOYEEID=employee_id, DATE=date_str, TYPE=schedule_type,
+        )
+        for idx, _ in matches:
+            update_record(filepath, fields, idx, {"WORKPLACID": int(workplace_id or 0)})
+        if matches:
+            self._invalidate_cache("MASHI")
+        return len(matches)
 
     # ── Write: delete schedule entry ──────────────────────────
     def delete_schedule_entry(self, employee_id: int, date_str: str) -> int:
