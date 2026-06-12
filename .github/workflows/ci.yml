@@ -62,3 +62,25 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:test@localhost:5432/postgres
         run: pytest -v
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # Audits the runtime dependencies (incl. the postgres extra); dev tools
+      # are not shipped and therefore not installed here.
+      - name: Audit Python dependencies (pip-audit)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[postgres]"
+          pip-audit
