@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Einschränkungs-Grad (5RESTR.RESTRICT, Spec 4.11, Dekompilat-belegt):
+  `set_restriction(grade=…)` schreibt 0=keine / 1=„auf Anfrage" / 2=„nie"
+  (Vorgabe 2) und aktualisiert den Grad eines bestehenden Satzes.
 - Optionaler CDX-Index-Schreiber (ROADMAP §B.2): `SP5_CDX_WRITE=1` (Default aus)
   baut die FoxPro-Compound-Index-`.CDX` nach jedem Schreibzugriff byte-genau neu
   auf, statt sie zu verwerfen — das Original öffnet die Tabelle dann ohne

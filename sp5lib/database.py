@@ -5452,21 +5452,32 @@ class SP5Database:
         shift_id: int,
         reason: str = "",
         weekday: int = 0,
+        grade: int = 2,
     ) -> dict:
-        """Create a restriction (or return existing one)."""
+        """Create a restriction (or update its grade if one exists).
+
+        ``grade`` (5RESTR.RESTRICT, Spec 4.11/D-58, Dekompilat-belegt SP5R):
+        0 = keine (ohne Einschränkung), 1 = „auf Anfrage"/„?" (nur auf
+        Nachfrage), 2 = „nie" (harte Sperre, Vorgabe). 0/1/2 wird geklemmt.
+        """
+        grade = grade if grade in (0, 1, 2) else 2
         filepath = self._table("RESTR")
         fields = get_table_fields(filepath)
         existing = find_all_records(
             filepath, fields, EMPLOYEEID=employee_id, SHIFTID=shift_id, WEEKDAY=weekday
         )
         if existing:
-            rec = existing[0][1]
+            raw_idx, rec = existing[0]
+            update_record(filepath, fields, raw_idx, {
+                "RESTRICT": grade, "RESERVED": (reason or "")[:20],
+            })
             return {
                 "id": rec.get("ID"),
                 "employee_id": employee_id,
                 "shift_id": shift_id,
                 "weekday": weekday,
                 "reason": reason,
+                "grade": grade,
                 "exists": True,
             }
         new_id = self._next_id("RESTR")
@@ -5475,11 +5486,11 @@ class SP5Database:
             "EMPLOYEEID": employee_id,
             "WEEKDAY": weekday,
             "SHIFTID": shift_id,
-            "RESTRICT": 1,
+            "RESTRICT": grade,
             "RESERVED": (reason or "")[:20],
         }
         append_record(filepath, fields, record)
-        return {**record, "exists": False}
+        return {**record, "grade": grade, "exists": False}
 
     def remove_restriction(
         self, employee_id: int, shift_id: int, weekday: int = 0
