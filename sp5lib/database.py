@@ -5340,6 +5340,96 @@ class SP5Database:
             count += 1
         return count
 
+    # ── Ersatzsuche / Notfallplan ─────────────────────────────
+    def eligible_replacements(
+        self,
+        date_str: str,
+        shift_id: int,
+        absent_employee_id: int,
+        group_id: int | None = None,
+    ) -> list[dict]:
+        """Geeignete Vertretungen für *shift_id* am *date_str* (Spec Kap. 5/6).
+
+        Filtert hart nach den Eignungskriterien des Originals
+        (calc.is_eligible_replacement): Bereich/Gruppe (5GRASG),
+        Beschäftigungszeitraum (5EMPL EMPSTART/EMPEND), Verfügbarkeit (an dem
+        Tag weder in 5MASHI/5SPSHI eingeteilt noch in 5ABSEN abwesend) und
+        Schichtkompatibilität (keine 5RESTR-Sperre für Wochentag/Schicht).
+
+        ``group_id`` schränkt den Bereich explizit ein; ohne Angabe gilt als
+        Bereich die Schnittmenge der Gruppen des ausgefallenen Mitarbeiters
+        (gemeinsame Gruppe genügt). Liefert nur geeignete Kandidaten, nach
+        Name sortiert.
+        """
+        d = calc.to_date(date_str)
+        if d is None:
+            raise ValueError(f"Ungültiges Datum: {date_str!r}")
+        holidays = self._calc_holidays()
+
+        # Bereich bestimmen: explizite Gruppe ODER Gruppen des Ausfall-MA.
+        members_by_group = self.get_all_group_members()
+        if group_id is not None:
+            allowed_ids: set[int] = set(members_by_group.get(group_id, []))
+        else:
+            absent_groups = [
+                gid for gid, members in members_by_group.items()
+                if absent_employee_id in members
+            ]
+            allowed_ids = {
+                eid
+                for gid in absent_groups
+                for eid in members_by_group.get(gid, [])
+            }
+
+        # Belegung des Tages: 5MASHI + 5SPSHI (eingeteilt), 5ABSEN (abwesend).
+        busy_by_emp: dict[int, set[date]] = {}
+        for table in ("MASHI", "SPSHI"):
+            for r in self._read(table):
+                rd = calc.to_date(r.get("DATE"))
+                if rd is not None:
+                    busy_by_emp.setdefault(r.get("EMPLOYEEID"), set()).add(rd)
+        absent_by_emp: dict[int, set[date]] = {}
+        for r in self._read("ABSEN"):
+            rd = calc.to_date(r.get("DATE"))
+            if rd is not None:
+                absent_by_emp.setdefault(r.get("EMPLOYEEID"), set()).add(rd)
+
+        restr_by_emp: dict[int, list[dict]] = {}
+        for r in self._read("RESTR"):
+            restr_by_emp.setdefault(r.get("EMPLOYEEID"), []).append(r)
+
+        candidates: list[dict] = []
+        for emp in self.get_employees(include_hidden=True):
+            eid = emp["ID"]
+            if eid == absent_employee_id:
+                continue
+            ctx = self._calc_context(emp)
+            ok, _reason = calc.is_eligible_replacement(
+                ctx,
+                d,
+                shift_id,
+                holidays,
+                is_hidden=bool(emp.get("HIDE")),
+                in_group=eid in allowed_ids,
+                busy_dates=busy_by_emp.get(eid, set()),
+                absent_dates=absent_by_emp.get(eid, set()),
+                restrictions=restr_by_emp.get(eid, []),
+            )
+            if not ok:
+                continue
+            candidates.append(
+                {
+                    "id": eid,
+                    "name": emp.get("NAME", ""),
+                    "firstname": emp.get("FIRSTNAME", ""),
+                    "shortname": emp.get("SHORTNAME", ""),
+                    "function": emp.get("FUNCTION", "") or "",
+                    "hrs_week": emp.get("HRSWEEK", 0.0) or 0.0,
+                }
+            )
+        candidates.sort(key=lambda c: (c["name"].lower(), c["firstname"].lower()))
+        return candidates
+
     # ── Write: Periods ────────────────────────────────────────
     def create_period(self, data: dict) -> dict:
         """Append a new accounting period to 5PERIO."""

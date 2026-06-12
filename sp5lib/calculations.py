@@ -175,6 +175,70 @@ def is_employed(emp: EmployeeContext, d: date) -> bool:
     return True
 
 
+# ── Ersatzsuche / Notfallplan (Eignung eines Vertretungs-MA) ────
+
+
+def is_restricted(
+    restrictions: Iterable[Record], shift_id: int, weekday_index: int
+) -> bool:
+    """True wenn 5RESTR den MA an *weekday_index* für *shift_id* sperrt.
+
+    ``restrictions`` sind die 5RESTR-Sätze EINES Mitarbeiters. ``weekday_index``
+    ist der Tagesindex 0..7 (Mo..So, 7 = Feiertag, D-34) — auf Feiertagen wird
+    auch eine Sperre des konkreten Wochentags geprüft, damit eine Mo-Sperre an
+    einem Feiertags-Montag nicht stillschweigend entfällt. Ein vorhandener Satz
+    bedeutet "gesperrt" (RESTRICT, D-71: kleines Enum, Sperre = Satz existiert).
+    """
+    for r in restrictions:
+        if int(r.get("SHIFTID") or 0) != shift_id:
+            continue
+        wd = int(r.get("WEEKDAY") or 0)
+        if wd == weekday_index or (weekday_index == HOLIDAY_INDEX and wd == HOLIDAY_INDEX):
+            return True
+    return False
+
+
+def is_eligible_replacement(
+    emp: EmployeeContext,
+    d: date,
+    shift_id: int,
+    holidays: Holidays,
+    *,
+    is_hidden: bool,
+    in_group: bool,
+    busy_dates: Iterable[date],
+    absent_dates: Iterable[date],
+    restrictions: Iterable[Record],
+) -> tuple[bool, str | None]:
+    """Eignung eines Mitarbeiters als Vertretung für *shift_id* am Tag *d*.
+
+    Harte Kriterien (Original Kap. 5/6, Datenmodell 5RESTR/5GRASG/5EMPL):
+
+    1. nicht ausgeblendet (5EMPL.HIDE),
+    2. im Beschäftigungszeitraum (EMPSTART/EMPEND, D-? / 3.1),
+    3. zugehörig zum betrachteten Bereich/zur Gruppe (5GRASG),
+    4. verfügbar: an dem Tag weder schon eingeteilt (5MASHI/5SPSHI) noch
+       abwesend (5ABSEN),
+    5. schicht-/dienstkompatibel: keine 5RESTR-Sperre für (Wochentag, Schicht).
+
+    Liefert ``(True, None)`` bei Eignung, sonst ``(False, grund)`` mit einem
+    kurzen deutschen Ausschlussgrund (erster zutreffender Grund).
+    """
+    if is_hidden:
+        return False, "ausgeblendet"
+    if not is_employed(emp, d):
+        return False, "nicht im Beschäftigungszeitraum"
+    if not in_group:
+        return False, "nicht im Bereich"
+    if d in set(absent_dates):
+        return False, "abwesend"
+    if d in set(busy_dates):
+        return False, "bereits eingeteilt"
+    if is_restricted(restrictions, shift_id, day_index(d, holidays)):
+        return False, "Schichtrestriktion (5RESTR)"
+    return True, None
+
+
 # ── 3.2 Working days and holidays ───────────────────────────────
 
 
