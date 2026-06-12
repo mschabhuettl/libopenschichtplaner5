@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optionaler CDX-Index-Schreiber (ROADMAP §B.2): `SP5_CDX_WRITE=1` (Default aus)
+  baut die FoxPro-Compound-Index-`.CDX` nach jedem Schreibzugriff byte-genau neu
+  auf, statt sie zu verwerfen — das Original öffnet die Tabelle dann ohne
+  Index-Neuaufbau. Default bleibt die bewährte Invalidierung; bei unbekannter
+  Schlüsselform fällt der Schreiber sicher auf Löschen zurück. 60/60 Beispiel-CDX
+  byte-identisch reproduziert (einzige Ausnahme dokumentiert: der CodeBase-interne
+  Key-Op-Zähler in Header-Offset 0x08 wird beim In-place-Rebuild erhalten).
+- Differenzierte Sichtbarkeit (Spec 9.5.3): `get_user_visible_employee_ids` /
+  `get_user_visible_group_ids` leiten aus 5GRACC (inkl. Untergruppen-Vererbung
+  über SUPERID) und 5EMACC die für einen Benutzer sichtbaren Mitarbeiter/Gruppen
+  ab (`None` = unbeschränkt). Der subtraktive 5EMACC-„kein Zugriff"-Override ist
+  als unsicher dokumentiert (5EMACC in der Referenz-DB leer) und wirkt additiv.
 - Arbeitsplatz im Dienstplan (Spec 6.4): `add_schedule_entry(workplace_id=…)` und
   `set_schedule_workplace(...)` setzen 5MASHI.WORKPLACID; `get_schedule` reichert
   `workplace_name` aus 5WOPL an.

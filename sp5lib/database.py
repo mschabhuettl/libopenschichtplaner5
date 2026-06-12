@@ -6155,6 +6155,63 @@ class SP5Database:
         delete_record(filepath, fields, raw_idx)
         return 1
 
+    # ── Differenzierte Sichtbarkeit (Spec 9.5.3, 5GRACC/5EMACC) ──
+    def _descendant_group_ids(self, group_ids: set[int]) -> set[int]:
+        """Erweitere eine Gruppenmenge um alle Untergruppen (SUPERID-Vererbung,
+        Spec 9.5.3 Nr. 5c)."""
+        children: dict[int, list[int]] = {}
+        for g in self._read("GROUP"):
+            children.setdefault(g.get("SUPERID") or 0, []).append(g.get("ID"))
+        out = set(group_ids)
+        stack = list(group_ids)
+        while stack:
+            gid = stack.pop()
+            for child in children.get(gid, []):
+                if child is not None and child not in out:
+                    out.add(child)
+                    stack.append(child)
+        return out
+
+    def get_user_visible_employee_ids(self, user_id: int) -> set[int] | None:
+        """Sichtbare Mitarbeiter eines Benutzers (Spec 9.5.3 Nr. 6).
+
+        ``None`` = keine Einschränkung (Admin/volle bzw. nur-lesende Rechte ohne
+        differenzierte Festlegung). Sonst die Menge der MA-IDs, die über eine
+        Gruppen- (5GRACC, inkl. Untergruppen) oder Mitarbeiter-Festlegung (5EMACC)
+        zugänglich sind. Mitarbeiter ohne jede Festlegung bleiben verborgen.
+
+        Hinweis (Regel 6): Der subtraktive 5EMACC-„kein Zugriff"-Override
+        (Verbotsschild) wird NICHT erzwungen — der RIGHTS-Wert dafür ist in der
+        Referenz-DB nicht beobachtbar (5EMACC leer) und im Datenmodell unsicher;
+        5EMACC-Einträge wirken hier additiv (erweiternd). 5GRACC-Sichtbarkeit ist
+        vollständig umgesetzt.
+        """
+        gracc = self.get_group_access(user_id)
+        emacc = self.get_employee_access(user_id)
+        if not gracc and not emacc:
+            return None  # keine differenzierten Rechte ⇒ alles sichtbar
+        visible: set[int] = set()
+        group_ids = {g["group_id"] for g in gracc if g.get("group_id")}
+        if group_ids:
+            members = self.get_all_group_members()
+            for gid in self._descendant_group_ids(group_ids):
+                visible.update(members.get(gid, []))
+        for e in emacc:
+            eid = e.get("employee_id")
+            if eid:
+                visible.add(eid)
+        return visible
+
+    def get_user_visible_group_ids(self, user_id: int) -> set[int] | None:
+        """Sichtbare Gruppen eines Benutzers (5GRACC inkl. Untergruppen).
+        ``None`` = keine Einschränkung. Siehe get_user_visible_employee_ids."""
+        gracc = self.get_group_access(user_id)
+        emacc = self.get_employee_access(user_id)
+        if not gracc and not emacc:
+            return None
+        group_ids = {g["group_id"] for g in gracc if g.get("group_id")}
+        return self._descendant_group_ids(group_ids) if group_ids else set()
+
     # ── Employee Access (5EMACC) ──────────────────────────────
     def get_employee_access(self, user_id: int | None = None) -> list[dict]:
         """Get employee-level access restrictions for users."""
