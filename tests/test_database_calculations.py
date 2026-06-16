@@ -643,6 +643,42 @@ def test_night_charge_crosses_midnight(tmp_path):
     assert result["Nachtstunden"]["hours"] == pytest.approx(8.0)
 
 
+def test_extracharge_hours_by_day_splits_at_midnight(tmp_path):
+    """Zeitzuschläge je Tag (A8): Nachtschicht 22-06 ∩ Nachtfenster ergibt je Tag
+    eine Zeile (2 h am Eintragstag, 6 h am Folgetag); Summe = Gesamtwert."""
+    night_shift = {"ID": 3, "NAME": "Nachtschicht", "SHORTNAME": "N", "POSITION": 3,
+                   "HIDE": 0, "NOEXTRA": 0}
+    for i in range(7):
+        night_shift[f"STARTEND{i}"] = "22:00-06:00"
+        night_shift[f"DURATION{i}"] = 8.0
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [night_shift],
+        "5XCHAR": [NIGHT_CHARGE],
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 3, "DATE": "2014-12-01"}],
+    })
+    rows = db.extracharge_hours_by_day(2014, 12)
+    by_date = {r["date"]: r["hours"] for r in rows if r["charge_name"] == "Nachtstunden"}
+    assert by_date == {"2014-12-01": pytest.approx(2.0), "2014-12-02": pytest.approx(6.0)}
+    for r in rows:
+        assert r["employee_id"] == 1 and r["charge_id"] == 3
+
+    # Invariante: Summe der Tageszeilen je Regel == aggregierter Gesamtwert
+    total = {r["charge_id"]: r["hours"] for r in db.calculate_extracharge_hours(2014, 12)}
+    per_charge: dict[int, float] = {}
+    for r in rows:
+        per_charge[r["charge_id"]] = per_charge.get(r["charge_id"], 0.0) + r["hours"]
+    assert per_charge[3] == pytest.approx(total[3])
+
+    # Freier Zeitraum schneidet wie calculate_extracharge_hours
+    assert db.extracharge_hours_by_day(date_from="2014-12-02", date_to="2014-12-02") == [
+        {"employee_id": 1, "employee_name": EMP_WEEK["NAME"], "date": "2014-12-02",
+         "charge_id": 3, "charge_name": "Nachtstunden", "hours": pytest.approx(6.0)},
+    ]
+    with pytest.raises(ValueError):
+        db.extracharge_hours_by_day(date_from="2014-12-31", date_to="2014-12-01")
+
+
 def test_spshi_without_shiftid_uses_own_window(tmp_path):
     """Befund 8 Nr. 7: 5SPSHI ohne SHIFTID zählt mit eigenem STARTEND-Fenster."""
     db = make_db(tmp_path, {

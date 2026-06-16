@@ -4293,6 +4293,69 @@ class SP5Database:
             for cid, acc in charge_acc.items()
         ]
 
+    def extracharge_hours_by_day(
+        self,
+        year: int | None = None,
+        month: int | None = None,
+        employee_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Zeitzuschläge je Tag (Spec 3.8): je (Mitarbeiter, Tag, Zuschlag) eine Zeile
+        mit Stunden > 0. Nutzt dieselbe Berechnungsschicht wie
+        :meth:`calculate_extracharge_hours` (Fensterschnitt, Tageswechsel-Split,
+        Tagindex 7, NOEXTRA, expandierte 5CYASS); nur die Aggregation ist je Tag
+        statt je Regel. Zeitraum wie dort: ``year``+``month`` oder ``date_from``/
+        ``date_to`` (Vorrang)."""
+        charges = self.get_extracharges(include_hidden=False)
+        if not charges:
+            return []
+
+        if date_from is not None and date_to is not None:
+            von = date.fromisoformat(str(date_from))
+            bis = date.fromisoformat(str(date_to))
+            if von > bis:
+                raise ValueError("date_from muss <= date_to sein")
+        elif year is None or month is None:
+            raise ValueError("Entweder year+month oder date_from+date_to angeben")
+        else:
+            von = date(year, month, 1)
+            bis = self._last_of_month(year, month)
+        inputs = self._calc_inputs(von, bis, employee_id)
+
+        employees = self.get_employees(include_hidden=True)
+        if employee_id is not None:
+            employees = [e for e in employees if e["ID"] == employee_id]
+
+        rows: list[dict] = []
+        for emp in employees:
+            eid = emp["ID"]
+            plan = self._plan_kwargs(inputs, eid)
+            if not (
+                plan["manual_shifts"] or plan["cycle_shifts"] or plan["special_shifts"]
+            ):
+                continue
+            ctx = self._calc_context(emp)
+            intervals = calc.daily_work_intervals(ctx, von, bis, **plan)
+            for c in charges:
+                for d, work in intervals.items():
+                    hours = calc.extracharge_hours_on_day(
+                        c, d, work, holidays=inputs["holidays"]
+                    )
+                    if hours > calc.EPSILON:
+                        rows.append(
+                            {
+                                "employee_id": eid,
+                                "employee_name": emp.get("NAME", ""),
+                                "date": d.isoformat(),
+                                "charge_id": c["ID"],
+                                "charge_name": c["NAME"],
+                                "hours": round(hours, 2),
+                            }
+                        )
+        rows.sort(key=lambda r: (r["employee_id"], r["date"], r["charge_id"]))
+        return rows
+
     # ── Leave Entitlements ────────────────────────────────────
     def get_absences_list(
         self,

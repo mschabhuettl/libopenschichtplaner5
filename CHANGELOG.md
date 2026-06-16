@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SP5Database.extracharge_hours_by_day(...)`: Zeitzuschläge je Tag (Spec 3.8) —
+  je (Mitarbeiter, Tag, Zuschlag) eine Zeile mit Stunden > 0, über dieselbe
+  Berechnungsschicht wie `calculate_extracharge_hours` (Tageswechsel-Split,
+  Fensterschnitt, NOEXTRA, expandierte 5CYASS). Zeitraum als Monat oder freier
+  Bereich; die Summe der Tageszeilen je Regel entspricht dem aggregierten Wert.
+
 ## [1.12.2] - 2026-06-16
 
 ### Fixed
