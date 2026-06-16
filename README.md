@@ -1,6 +1,9 @@
 # libopenschichtplaner5
 
 [![CI](https://github.com/mschabhuettl/libopenschichtplaner5/actions/workflows/ci.yml/badge.svg)](https://github.com/mschabhuettl/libopenschichtplaner5/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/libopenschichtplaner5?logo=pypi&logoColor=white)](https://pypi.org/project/libopenschichtplaner5/)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-image-2496ED?logo=docker&logoColor=white)](https://github.com/mschabhuettl/libopenschichtplaner5/pkgs/container/libopenschichtplaner5)
+[![GitHub release](https://img.shields.io/github/v/release/mschabhuettl/libopenschichtplaner5?logo=github)](https://github.com/mschabhuettl/libopenschichtplaner5/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 The core library behind [**OpenSchichtplaner5**](https://github.com/mschabhuettl/openschichtplaner5) —
@@ -84,9 +87,15 @@ sp5lib sync     /path/to/SP5/Daten --target postgres://user:pw@host/db  # DBF �
 ```
 
 The same CLI is the default stage of the Dockerfile (slim, non-root,
-`ENTRYPOINT ["sp5lib"]`) — no local Python required:
+`ENTRYPOINT ["sp5lib"]`) — no local Python required. Each release publishes a
+multi-arch image to the GitHub Container Registry, so no local build is needed:
 
 ```bash
+# published image (multi-arch amd64+arm64, no build required):
+docker run --rm -v /path/to/SP5/Daten:/data:ro \
+  ghcr.io/mschabhuettl/libopenschichtplaner5:latest info /data   # or :1.12.0
+
+# or build it locally:
 docker build -t libopenschichtplaner5 .
 docker run --rm -v /path/to/SP5/Daten:/data:ro libopenschichtplaner5 info /data
 docker run --rm -v /path/to/SP5/Daten:/data:ro libopenschichtplaner5 dump /data 5EMPL --limit 5

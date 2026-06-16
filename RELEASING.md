@@ -1,8 +1,26 @@
 # Releases
 
 Releases laufen zweistufig: `prepare-release.yml` setzt Version und CHANGELOG
-und pusht das annotierte Tag; das tag-getriebene `release.yml` übernimmt das
-Publish nach PyPI (Trusted Publishing).
+und pusht das annotierte Tag; das tag-getriebene `release.yml` veröffentlicht
+**ein Tag auf alle Kanäle**:
+
+| Kanal | Inhalt |
+|---|---|
+| **PyPI** | sdist + wheel, Trusted Publishing (OIDC, keine Tokens) |
+| **ghcr.io** | das `sp5lib`-CLI/Tools-Image (Dockerfile-Stage `cli`), multi-arch (amd64+arm64), Tags volle Version / Minor / `latest` |
+| **GitHub-Release** | Body = die geschnittene CHANGELOG-Sektion; Assets = wheel + sdist + SBOM |
+
+Zusätzlich verpflichtend und automatisch: **Build-Provenance-Attestation**
+(`actions/attest-build-provenance`) für die Release-Assets **und** das Image,
+sowie ein **SPDX-SBOM** je Image (`anchore/sbom-action`) als Release-Asset und
+als SBOM-Attestation (`actions/attest-sbom`). Verifizierbar mit
+`gh attestation verify <asset|oci://…> --owner mschabhuettl`.
+
+Optional (ohne neue Secrets, Default aus): **cosign keyless** (OIDC) — per
+Repo-Variable `ENABLE_COSIGN=true` einschalten
+(`gh variable set ENABLE_COSIGN -b true`). Begründung: die verpflichtende
+Build-Provenance ist bereits Sigstore-keyless signiert; cosign ist optionales
+Opt-in.
 
 ## Ablauf
 
@@ -30,7 +48,10 @@ Publish nach PyPI (Trusted Publishing).
    Tag `vX.Y.Z` und stößt `release.yml` auf dem Tag-Ref an.
 
 4. **Publish (automatisch):** `release.yml` baut sdist + wheel und
-   veröffentlicht auf PyPI.
+   veröffentlicht auf **PyPI**, baut + pusht das CLI-Image multi-arch nach
+   **ghcr** (Tags Version/Minor/`latest`) und legt das **GitHub-Release** mit
+   Changelog-Body und wheel/sdist/SBOM als Assets an — inkl.
+   Attestation + SBOM (s. o.).
 
 5. **Downstream-Pins:** `openschichtplaner5-api` und `openschichtplaner5`
    ziehen den PyPI-Pin täglich automatisch nach (`update-pins.yml`). Direkt

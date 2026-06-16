@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Release-Automatik vervollständigt: ein Versions-Tag veröffentlicht jetzt
+  zusätzlich zum PyPI-Paket automatisch das `sp5lib`-CLI-Image nach
+  `ghcr.io/mschabhuettl/libopenschichtplaner5` (multi-arch amd64+arm64, Tags
+  volle Version / Minor / `latest`) und legt ein GitHub-Release mit dem
+  Changelog-Auszug sowie wheel, sdist und einem SPDX-SBOM als Assets an.
+  Release-Assets und Image tragen eine Build-Provenance-Attestation; je Image
+  wird ein SBOM erzeugt und attestiert. Optionale cosign-Signierung über die
+  Repo-Variable `ENABLE_COSIGN`.
+
 ## [1.12.0] - 2026-06-16
 
 ### Added
