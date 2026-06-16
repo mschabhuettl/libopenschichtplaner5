@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Release-Workflow: `sigstore/cosign-installer` auf eine existierende Version
+  gepinnt (`@v4.1.2`) — der zuvor referenzierte bewegliche `@v4`-Tag existiert
+  nicht, wodurch der (optionale, standardmäßig inaktive) Docker-Job bereits in
+  der Job-Vorbereitung scheiterte. Damit veröffentlicht ein Tag wieder
+  vollständig nach PyPI, ghcr und als GitHub-Release.
+
 ## [1.12.1] - 2026-06-16
 
 ### Changed
