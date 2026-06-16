@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `SP5Database.login_diagnostics(name)`: datenschutzsichere Diagnose zu einem
+  *fehlgeschlagenen* Login (Benutzer vorhanden ja/nein, gespeichertes Digest-Format,
+  bcrypt-Sidecar vorhanden) — berührt oder protokolliert nie das Passwort. Damit
+  lässt sich ein Real-DB-Login-Sonderfall aus den Server-Logs erklären.
+
 ## [1.11.0] - 2026-06-12
 
 ### Added
