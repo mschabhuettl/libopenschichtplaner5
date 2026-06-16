@@ -1143,6 +1143,38 @@ class SP5Database:
 
         return None
 
+    def login_diagnostics(self, name: str) -> dict:
+        """Privacy-safe diagnostics for a *failed* login — never touches/returns
+        the password. Lets an operator explain a real-DB login edge case from the
+        server logs (e.g. unexpected digest format, bcrypt-only account, hidden
+        user). Returns: user_found, hidden, digest_len, digest_is_md5_shape,
+        has_bcrypt.
+        """
+        try:
+            rows = self._read("USER")
+            bcrypt_hashes = self._load_bcrypt_hashes()
+        except Exception as exc:  # noqa: BLE001 — diagnostics must never raise
+            return {"error": type(exc).__name__}
+        target_name = name.strip().lower()
+        for r in rows:
+            if (r.get("NAME", "") or "").strip().lower() != target_name:
+                continue
+            digest = r.get("DIGEST", "")
+            if isinstance(digest, bytes):
+                digest_len = len(digest)
+            elif isinstance(digest, str):
+                digest_len = len(digest.encode("latin-1"))
+            else:
+                digest_len = 0
+            return {
+                "user_found": True,
+                "hidden": bool(r.get("HIDE")),
+                "digest_len": digest_len,
+                "digest_is_md5_shape": digest_len == 16,
+                "has_bcrypt": str(r.get("ID")) in bcrypt_hashes,
+            }
+        return {"user_found": False}
+
     # ── Cycles ─────────────────────────────────────────────────
     def get_cycles(self) -> list[dict]:
         cycles = self._read("CYCLE")
