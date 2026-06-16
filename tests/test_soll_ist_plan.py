@@ -5,7 +5,6 @@ jeder Dienst trägt schedule_type; add_schedule_entry schreibt TYPE.
 """
 
 import pytest
-
 from test_database_calculations import SPECS, make_db
 
 # 5MASHI inкl. TYPE (das Golden-Schema hat TYPE; die Default-Test-Spec nicht)
