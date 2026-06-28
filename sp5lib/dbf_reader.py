@@ -3,6 +3,7 @@ Pure Python DBF/dBASE reader for Schichtplaner5 databases.
 Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
 """
 
+import io
 import struct
 from datetime import date
 from typing import Any
@@ -222,56 +223,66 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, 
     crash.
     """
     try:
-        open_file = open(filepath, "rb")
+        with open(filepath, "rb") as f:
+            data = f.read()
     except OSError:
         # File missing, no permissions, or deleted between exists-check and open
         return []
+    return read_dbf_buffer(data)
 
-    with open_file as f:
-        # Read header (32 bytes)
-        header = f.read(32)
-        if len(header) < 32:
-            return []
 
-        num_records = struct.unpack_from("<I", header, 4)[0]
-        header_size = struct.unpack_from("<H", header, 8)[0]
-        record_size = struct.unpack_from("<H", header, 10)[0]
+def read_dbf_buffer(data: bytes) -> list[dict[str, Any]]:
+    """Parst einen bereits eingelesenen .DBF-Bytepuffer (siehe :func:`read_dbf`).
 
-        # Read field descriptors (32 bytes each, terminated by 0x0D)
-        fields: list[dict[str, Any]] = []
-        f.seek(32)
-        while True:
-            field_data = f.read(32)
-            if not field_data or len(field_data) < 32 or field_data[0] == 0x0D:
-                break
-            name = (
-                field_data[0:11]
-                .split(b"\x00")[0]
-                .decode("ascii", errors="replace")
-                .strip()
-            )
-            ftype = chr(field_data[11])
-            flen = field_data[16]
-            fdec = field_data[17]
-            fields.append({"name": name, "type": ftype, "len": flen, "dec": fdec})
+    Getrennt vom Dateizugriff, damit Aufrufer die Bytes nur EINMAL lesen müssen
+    (z. B. der DBF-Cache, der dieselben Bytes auch für die Inhalts-Prüfung hasht)
+    — wichtig bei langsamen Bind-Mounts/Netzpfaden.
+    """
+    if len(data) < 32:
+        return []
+    f = io.BytesIO(data)
+    # Read header (32 bytes)
+    header = f.read(32)
 
-        # Read records
-        f.seek(header_size)
-        records = []
-        names = _dedupe_names([str(f_["name"]) for f_ in fields])
-        # Feld-Specs einmal je Tabelle berechnen und für alle Datensätze nutzen.
-        specs = _compile_field_specs(fields, names)
+    num_records = struct.unpack_from("<I", header, 4)[0]
+    header_size = struct.unpack_from("<H", header, 8)[0]
+    record_size = struct.unpack_from("<H", header, 10)[0]
 
-        for _ in range(num_records):
-            raw = f.read(record_size)
-            if not raw or len(raw) < record_size:
-                break
+    # Read field descriptors (32 bytes each, terminated by 0x0D)
+    fields: list[dict[str, Any]] = []
+    f.seek(32)
+    while True:
+        field_data = f.read(32)
+        if not field_data or len(field_data) < 32 or field_data[0] == 0x0D:
+            break
+        name = (
+            field_data[0:11]
+            .split(b"\x00")[0]
+            .decode("ascii", errors="replace")
+            .strip()
+        )
+        ftype = chr(field_data[11])
+        flen = field_data[16]
+        fdec = field_data[17]
+        fields.append({"name": name, "type": ftype, "len": flen, "dec": fdec})
 
-            # Skip deleted records (first byte = 0x2A = '*')
-            if raw[0] == 0x2A:
-                continue
+    # Read records
+    f.seek(header_size)
+    records = []
+    names = _dedupe_names([str(f_["name"]) for f_ in fields])
+    # Feld-Specs einmal je Tabelle berechnen und für alle Datensätze nutzen.
+    specs = _compile_field_specs(fields, names)
 
-            records.append(_parse_record_specs(raw, specs))
+    for _ in range(num_records):
+        raw = f.read(record_size)
+        if not raw or len(raw) < record_size:
+            break
+
+        # Skip deleted records (first byte = 0x2A = '*')
+        if raw[0] == 0x2A:
+            continue
+
+        records.append(_parse_record_specs(raw, specs))
 
     return records
 

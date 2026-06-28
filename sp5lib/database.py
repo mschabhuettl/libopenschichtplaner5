@@ -4,6 +4,7 @@ High-level database access for Schichtplaner5 .DBF files.
 
 import calendar
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from typing import Any
 from . import _resource_paths as _paths
 from . import calculations as calc
 from .color_utils import bgr_to_hex, is_light_color
-from .dbf_reader import get_table_fields, read_dbf
+from .dbf_reader import get_table_fields, read_dbf, read_dbf_buffer
 from .dbf_writer import (
     _read_header_info as _dbf_header_info,
 )
@@ -67,6 +68,14 @@ def _invalidate_cache_for_file(filepath: str) -> None:
         ]
         for key in stale:
             _GLOBAL_DBF_CACHE.pop(key, None)
+        # Den abgeleiteten Monatsindex derselben Tabelle ebenfalls verwerfen.
+        stale_idx = [
+            k
+            for k in _GLOBAL_MONTH_INDEX
+            if os.path.normpath(os.path.join(k[0], f"5{k[1]}.DBF")) == target
+        ]
+        for k in stale_idx:
+            _GLOBAL_MONTH_INDEX.pop(k, None)
 
 
 # dbf_writer-Funktionen mit zentraler Cache-Invalidierung umhüllt, damit
@@ -102,37 +111,56 @@ class SP5Database:
         return os.path.join(self.db_path, f"5{name}.DBF")
 
     def _read(self, name: str) -> list[dict[str, Any]]:
-        """Read a DBF table, using a global mtime-based cache.
+        """Read a DBF table via a global, content-aware cache.
 
-        The cache is shared across all requests and instances for the same
-        db_path. Data is refreshed automatically when the file changes on disk
-        (mtime check), so write operations are picked up without manual
-        invalidation — while read-heavy workloads avoid redundant disk I/O.
+        Cache-Eintrag: ``(mtime, size, content_hash, data)``, geteilt über alle
+        Requests/Instanzen desselben db_path.
+
+        - **Schnellpfad** (unveränderte ``(mtime, size)``): liefert den Parse ohne
+          jede Datei-I/O — der Normalfall zwischen zwei Änderungen.
+        - **mtime/size geändert** (z. B. ein Mirror-Re-Sync, der die Dateien neu
+          schreibt): die Bytes werden EINMAL gelesen und gehasht. Ist der Inhalt
+          byte-identisch zur gecachten Version (No-op-Sync), wird der vorhandene
+          Parse behalten und nur ``(mtime, size)`` aktualisiert — KEIN Re-Parse.
+          Nur echt geänderter Inhalt wird neu geparst.
+
+        Schreibzugriffe gehen über dbf_writer direkt auf die DBF (write-through);
+        der Cache ist reine Lese-Beschleunigung, die DBF bleibt Quelle der Wahrheit.
         """
         path = self._table(name)
         key = (self.db_path, name)
         try:
-            mtime = os.path.getmtime(path)
+            st = os.stat(path)
+            mtime, size = st.st_mtime, st.st_size
         except OSError:
-            mtime = 0.0
+            mtime, size = 0.0, 0
 
         with _CACHE_LOCK:
             cached = _GLOBAL_DBF_CACHE.get(key)
-            if cached is not None and cached[0] == mtime:
-                return cached[1]
+            if cached is not None and cached[0] == mtime and cached[1] == size:
+                return cached[3]
 
+        # (mtime, size) geändert oder Erstzugriff: Bytes einmal lesen und hashen.
         try:
-            data = read_dbf(path)
-        except Exception as _exc:
-            # Corrupted or temporarily unreadable file — return empty list
-            # but do NOT cache, so the next request retries the read.
+            with open(path, "rb") as fh:
+                raw_bytes = fh.read()
+        except OSError as _exc:
             _db_logger.error(
                 "DBF read error: table=%s path=%s error=%s", name, path, _exc
             )
             return []
 
+        content_hash = hashlib.blake2b(raw_bytes, digest_size=16).digest()
         with _CACHE_LOCK:
-            _GLOBAL_DBF_CACHE[key] = (mtime, data)
+            cached = _GLOBAL_DBF_CACHE.get(key)
+            if cached is not None and cached[2] == content_hash:
+                # No-op-Sync: gleiche Bytes, nur neue mtime → Parse wiederverwenden.
+                _GLOBAL_DBF_CACHE[key] = (mtime, size, content_hash, cached[3])
+                return cached[3]
+
+        data = read_dbf_buffer(raw_bytes)
+        with _CACHE_LOCK:
+            _GLOBAL_DBF_CACHE[key] = (mtime, size, content_hash, data)
         return data
 
     def _read_by_month(
@@ -140,32 +168,31 @@ class SP5Database:
     ) -> dict[str, list[dict[str, Any]]]:
         """Datensätze einer datierten Tabelle nach Monats-Präfix (YYYY-MM) gruppiert.
 
-        Reine Lese-Schicht über :meth:`_read`: an dieselbe mtime gekoppelt und
-        daher mit dem DBF-Cache konsistent (Schreibzugriff ändert die mtime →
-        Neuaufbau). Erspart get_schedule den Volltabellen-Scan pro Request — der
-        Index wird je Tabelle einmal gebaut und über Requests wiederverwendet.
-        Datumswerte sind ISO-zero-padded (YYYY-MM-DD), daher ist ``d[:7]`` exakt
-        der Monats-Präfix, gegen den get_schedule früher mit ``startswith`` filterte.
+        Reine Lese-Schicht über :meth:`_read`: der Index ist an den Inhalts-Hash
+        des DBF-Caches gekoppelt und wird nur neu gebaut, wenn sich der Inhalt
+        wirklich ändert (nicht schon bei einem No-op-Sync oder gleichem mtime-Tick).
+        Erspart get_schedule den Volltabellen-Scan pro Request. Datumswerte sind
+        ISO-zero-padded (YYYY-MM-DD), daher ist ``d[:7]`` exakt der Monats-Präfix,
+        gegen den get_schedule früher mit ``startswith`` filterte.
         """
-        path = self._table(name)
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            mtime = 0.0
-        key = (self.db_path, name, date_field)
+        # _read() hält den DBF-Cache (inkl. content_hash) aktuell und liefert die Daten.
+        data = self._read(name)
         with _CACHE_LOCK:
+            entry = _GLOBAL_DBF_CACHE.get((self.db_path, name))
+            content_hash = entry[2] if entry is not None else None
+            key = (self.db_path, name, date_field)
             cached = _GLOBAL_MONTH_INDEX.get(key)
-            if cached is not None and cached[0] == mtime:
+            if cached is not None and cached[0] == content_hash:
                 return cached[1]
 
         index: dict[str, list[dict[str, Any]]] = {}
-        for r in self._read(name):
+        for r in data:
             d = r.get(date_field) or ""
             if len(d) >= 7:
                 index.setdefault(d[:7], []).append(r)
 
         with _CACHE_LOCK:
-            _GLOBAL_MONTH_INDEX[key] = (mtime, index)
+            _GLOBAL_MONTH_INDEX[key] = (content_hash, index)
         return index
 
     def _invalidate_cache(self, name: str) -> None:

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- DBF-Lese-Cache invalidiert jetzt inhaltsbasiert statt nur über die mtime. Auf
+  Deployments, deren DBF-Verzeichnis periodisch gespiegelt/neu synchronisiert wird
+  (z. B. ein 15-Minuten-Mirror auf einem Bind-Mount), änderte bisher jeder Sync die
+  mtime und erzwang ein vollständiges Neu-Parsen ALLER Tabellen beim nächsten Zugriff
+  — auch wenn sich inhaltlich nichts geändert hatte. Der Cache prüft bei geänderter
+  mtime nun den Inhalts-Hash der Datei (einmalig gelesen, derselbe Puffer wird ggf.
+  geparst) und behält bei unverändertem Inhalt den vorhandenen Parse. Gemessen sinkt
+  die Strafe eines No-op-Syncs von ~66 ms auf ~1,5 ms (15 000-Datensatz-Tabelle, ~36×
+  → ~2× gegenüber warm). Der Monatsindex ist an denselben Inhalts-Hash gekoppelt. Die
+  DBF-Dateien bleiben alleinige Quelle der Wahrheit; Schreibzugriffe gehen unverändert
+  sofort byte-genau auf die DBF (write-through), der Cache ist reine Lese-Schicht.
+
 ## [1.14.2] - 2026-06-28
 
 ### Changed
