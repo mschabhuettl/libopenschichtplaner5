@@ -5197,6 +5197,43 @@ class SP5Database:
             "note": note,
         }
 
+    def update_booking(
+        self,
+        booking_id: int,
+        date_str: str | None = None,
+        booking_type: int | None = None,
+        value: float | None = None,
+        note: str | None = None,
+    ) -> dict | None:
+        """Update a manual booking in 5BOOK.DBF. Only provided fields change.
+
+        Returns the updated record dict, or None if no booking has that ID.
+        """
+        filepath = self._table("BOOK")
+        fields = get_table_fields(filepath)
+        raw_idx, record = self._find_record("BOOK", booking_id)
+        if raw_idx is None:
+            return None
+        update_data: dict = {}
+        if date_str is not None:
+            update_data["DATE"] = date_str
+        if booking_type is not None:
+            update_data["TYPE"] = booking_type
+        if value is not None:
+            update_data["VALUE"] = value
+        if note is not None:
+            update_data["NOTE"] = (note or "")[:200]
+        if update_data:
+            update_record(filepath, fields, raw_idx, update_data)
+        return {
+            "id": booking_id,
+            "employee_id": record.get("EMPLOYEEID"),
+            "date": update_data.get("DATE", record.get("DATE")),
+            "type": update_data.get("TYPE", record.get("TYPE")),
+            "value": update_data.get("VALUE", record.get("VALUE")),
+            "note": update_data.get("NOTE", record.get("NOTE")),
+        }
+
     def delete_booking(self, booking_id: int) -> int:
         """Delete a booking from 5BOOK.DBF by ID. Returns 1 if deleted, 0 if not found."""
         filepath = self._table("BOOK")

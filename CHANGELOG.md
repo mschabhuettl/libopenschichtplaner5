@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `update_booking(booking_id, …)` ändert eine bestehende manuelle Kontobuchung in
+  `5BOOK.DBF`. Nur die übergebenen Felder (`date_str`, `booking_type`, `value`,
+  `note`) werden geschrieben; nicht angegebene Felder bleiben unverändert. Gibt den
+  aktualisierten Satz als dict zurück bzw. `None`, wenn keine Buchung diese ID hat.
+  Damit lässt sich eine Buchung bearbeiten, statt sie löschen und neu anlegen zu
+  müssen.
+
 ## [1.18.0] - 2026-06-28
 
 ### Added

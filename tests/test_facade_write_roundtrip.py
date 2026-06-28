@@ -173,6 +173,28 @@ def test_booking_negative_f_value_roundtrip(db):
     assert abs(db._read("BOOK")[0]["VALUE"] - (-3.25)) < 1e-6
 
 
+def test_update_booking_roundtrip(db):
+    # P-VOLLERFASSUNG MitarbeiterErfassen.41: Buchung bearbeiten (statt nur
+    # Anlegen+Löschen). update_booking ändert nur die übergebenen Felder.
+    rec = db.create_booking(40, "2026-07-22", booking_type=0, value=5.0, note="alt")
+    out = db.update_booking(rec["id"], value=8.5, note="neu")
+    assert out is not None
+    r = next(x for x in db._read("BOOK") if x["ID"] == rec["id"])
+    assert abs(r["VALUE"] - 8.5) < 1e-6
+    assert r["NOTE"] == "neu"
+    # Datum/Typ unverändert (nicht mitgegeben)
+    assert r["TYPE"] == 0
+    # Teil-Update nur des Datums lässt den (geänderten) Wert stehen
+    db.update_booking(rec["id"], date_str="2026-08-01")
+    r2 = next(x for x in db._read("BOOK") if x["ID"] == rec["id"])
+    assert str(r2["DATE"]) == "2026-08-01"
+    assert abs(r2["VALUE"] - 8.5) < 1e-6
+
+
+def test_update_booking_unknown_id_returns_none(db):
+    assert db.update_booking(999999, value=1.0) is None
+
+
 # ── 5LEAEN (Urlaubsanspruch, F-Format) ──────────────────────────────────────
 
 
