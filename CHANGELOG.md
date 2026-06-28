@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Konflikterkennung meldet keine Falsch-Konflikte mehr bei normaler Soll-/Ist-Abweichung.
+  `get_schedule_conflicts` bezog Sollplan-Einträge (5MASHI.TYPE=1, Spec 4.12/D-58) mit ein,
+  sodass eine geplante Soll-Schicht, die mit einer Ist-Abwesenheit (z. B. Krankenstand) am
+  selben Tag zusammentraf, fälschlich als „Schicht + Abwesenheit"-Konflikt erschien — das ist
+  aber die normale Soll-/Ist-Zwei-Ebenen-Ansicht (das Original-Schichtplaner5 kennt zwischen
+  den Ebenen gar keine Konfliktprüfung). Konflikte werden jetzt ausschließlich auf der
+  Ist-Ebene ermittelt (Sollplan-Ziele ausgeschlossen). Echte Konflikte bleiben erhalten: ein
+  tatsächlicher Ist-Dienst neben einer Abwesenheit (oder ein Feiertags-/Über-10-h-Dienst)
+  wird weiterhin gemeldet.
+
 ## [1.14.3] - 2026-06-28
 
 ### Changed

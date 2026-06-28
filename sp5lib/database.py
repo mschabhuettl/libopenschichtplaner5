@@ -5439,6 +5439,13 @@ class SP5Database:
           - holiday_shift: employee has a shift on a public holiday (severity: warning)
           - long_shift: employee has a shift lasting more than 10 hours (severity: warning)
 
+        Konflikte werden ausschließlich auf der **Ist-Ebene** ermittelt: Sollplan-
+        Einträge (5MASHI.TYPE=1, Spec 4.12/D-58) sind geplante Zielvorgaben und werden
+        ausgeschlossen. Eine Soll-Schicht, die mit einer Ist-Abwesenheit (Krankenstand)
+        oder einer Ist-Schicht am selben Tag zusammentrifft, ist die normale Soll-/Ist-
+        Zwei-Ebenen-Ansicht und KEIN Konflikt — das Original-Schichtplaner5 kennt zwischen
+        den beiden Ebenen gar keine Konfliktprüfung (eigenständige, unabhängige Ebenen).
+
         Note: Hidden employees (HIDE=True) are intentionally excluded from conflict detection.
         This matches the Schichtplaner5 convention where hidden employees are archived/inactive
         and should not generate operational warnings.
@@ -5476,6 +5483,13 @@ class SP5Database:
         shift_detail: dict = {}  # {(eid, date): shift_name}
         shift_duration: dict = {}  # {(eid, date): duration_hours}
         for r in self._read("MASHI"):
+            # Konflikte werden NUR auf der Ist-Ebene berechnet: ein Sollplan-Ziel
+            # (5MASHI.TYPE=1, Spec 4.12/D-58) ist eine geplante Vorgabe, kein
+            # tatsächlicher Dienst. Eine Soll-Schicht neben einer Ist-Abwesenheit
+            # (oder Ist-Schicht) ist die normale Soll-/Ist-Zwei-Ebenen-Ansicht,
+            # kein Konflikt — das Original kennt hier gar keine Konfliktprüfung.
+            if int(r.get("TYPE") or 0) == 1:
+                continue
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
                 eid = r.get("EMPLOYEEID")
