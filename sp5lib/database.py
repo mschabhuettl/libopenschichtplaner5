@@ -3865,6 +3865,7 @@ class SP5Database:
             "COLORTEXT": data.get("COLORTEXT", 0),
             "COLORBAR": data.get("COLORBAR", 0),
             "COLORBK": data.get("COLORBK", 16777215),
+            "BOLD": 1 if data.get("BOLD") else 0,
             "DURATION0": data.get("DURATION0", 0.0),
             "HIDE": 1 if data.get("HIDE") else 0,
             "RESERVED": "",
@@ -3923,6 +3924,9 @@ class SP5Database:
         # R5.5-15: keine Arbeitszeitzuschläge berechnen
         if "NOEXTRA" in data and "NOEXTRA" in field_names:
             update_data["NOEXTRA"] = 1 if data["NOEXTRA"] else 0
+        # Fette Schrift (5SHIFT.BOLD)
+        if "BOLD" in data and "BOLD" in field_names:
+            update_data["BOLD"] = 1 if data["BOLD"] else 0
         update_record(filepath, fields, raw_idx, update_data)
         self._invalidate_cache("SHIFT")
         return {"id": shift_id, **update_data}
@@ -3965,6 +3969,7 @@ class SP5Database:
             "COLORTEXT": data.get("COLORTEXT", 0),
             "COLORBAR": data.get("COLORBAR", 0),
             "COLORBK": data.get("COLORBK", 16777215),
+            "BOLD": 1 if data.get("BOLD") else 0,
             "ENTITLED": 1 if data.get("ENTITLED") else 0,
             "STDENTIT": data.get("STDENTIT", 0.0),
             "HIDE": 1 if data.get("HIDE") else 0,
@@ -3993,6 +3998,9 @@ class SP5Database:
         ):
             if key in data:
                 update_data[key] = data[key]
+        # Fette Schrift (5LEAVT.BOLD)
+        if "BOLD" in data:
+            update_data["BOLD"] = 1 if data["BOLD"] else 0
         update_record(filepath, fields, raw_idx, update_data)
         return {"id": lt_id, **update_data}
 

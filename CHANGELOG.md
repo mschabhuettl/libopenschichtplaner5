@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create_shift`/`update_shift` und `create_leave_type`/`update_leave_type`
+  schreiben jetzt das Fettschrift-Flag `BOLD` (5SHIFT.BOLD / 5LEAVT.BOLD). Das
+  Feld ist im Original vorhanden, wurde aber nie gesetzt. Beim Update wird ein
+  explizit übergebenes `BOLD=0` durchgereicht (Flag bleibt abschaltbar). GET
+  liefert das Feld bereits aus dem Rohsatz.
+
 ## [1.16.0] - 2026-06-28
 
 ### Added
