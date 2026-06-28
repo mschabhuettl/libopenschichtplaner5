@@ -10,7 +10,7 @@ Beide Richtungen abgesichert (Revert→rot):
 - Ist-Schicht  (TYPE=0) + Ist-Abwesenheit  → weiterhin GENAU EIN Konflikt
 """
 
-from test_database_calculations import SPECS, EMP_WEEK, make_db
+from test_database_calculations import EMP_WEEK, SPECS, make_db
 
 # 5MASHI inkl. TYPE-Spalte (Golden-Schema), analog test_soll_ist_plan.py
 _MASHI_T = [
