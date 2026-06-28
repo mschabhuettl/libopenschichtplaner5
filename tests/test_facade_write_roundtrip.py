@@ -80,6 +80,11 @@ _SCHEMAS = {
         ("LEAVETYPID", "N", 11), ("ENTITLEMNT", "F", 19), ("REST", "F", 19),
         ("INDAYS", "N", 1), ("RESERVED", "C", 20),
     ],
+    "5PERIO": [
+        ("ID", "N", 11), ("GROUPID", "N", 11), ("START", "D", 8),
+        ("END", "D", 8), ("COLOR", "N", 11), ("DESCRIPT", "C", 200),
+        ("RESERVED", "C", 20),
+    ],
 }
 
 
@@ -193,6 +198,31 @@ def test_update_booking_roundtrip(db):
 
 def test_update_booking_unknown_id_returns_none(db):
     assert db.update_booking(999999, value=1.0) is None
+
+
+# ── 5PERIO (gekennzeichnete Zeiträume, Bearbeiten) ──────────────────────────
+
+
+def test_update_period_roundtrip(db):
+    # P-VOLLERFASSUNG GruppenErfassen.20: gekennzeichneten Zeitraum bearbeiten
+    # (statt nur Anlegen+Löschen). update_period ändert nur die übergebenen Felder.
+    rec = db.create_period({
+        "group_id": 2, "start": "2026-07-01", "end": "2026-07-31",
+        "color": 255, "description": "Sommer",
+    })
+    out = db.update_period(rec["id"], {"end": "2026-08-15", "description": "Sommer+"})
+    assert out is not None
+    r = next(x for x in db._read("PERIO") if x["ID"] == rec["id"])
+    assert str(r["END"]) == "2026-08-15"
+    assert r["DESCRIPT"] == "Sommer+"
+    # Start/Gruppe/Farbe unverändert (nicht mitgegeben)
+    assert str(r["START"]) == "2026-07-01"
+    assert r["GROUPID"] == 2
+    assert r["COLOR"] == 255
+
+
+def test_update_period_unknown_id_returns_none(db):
+    assert db.update_period(999999, {"description": "x"}) is None
 
 
 # ── 5LEAEN (Urlaubsanspruch, F-Format) ──────────────────────────────────────

@@ -5984,6 +5984,38 @@ class SP5Database:
         delete_record(filepath, fields, raw_idx)
         return 1
 
+    def update_period(self, period_id: int, data: dict) -> dict | None:
+        """Update a marked period (5PERIO) in place. Only provided keys change
+        (``group_id``, ``start``, ``end``, ``color`` as BGR int, ``description``).
+        Returns the updated record dict, or None if no period has that ID."""
+        filepath = self._table("PERIO")
+        fields = get_table_fields(filepath)
+        raw_idx, record = self._find_record("PERIO", period_id)
+        if raw_idx is None:
+            return None
+        update_data: dict = {}
+        if "group_id" in data:
+            update_data["GROUPID"] = data["group_id"]
+        if "start" in data:
+            update_data["START"] = data["start"]
+        if "end" in data:
+            update_data["END"] = data["end"]
+        if "color" in data:
+            update_data["COLOR"] = data["color"]
+        if "description" in data:
+            update_data["DESCRIPT"] = (data["description"] or "")[:200]
+        if update_data:
+            update_record(filepath, fields, raw_idx, update_data)
+        color_val = update_data.get("COLOR", record.get("COLOR", 16777215))
+        return {
+            "id": period_id,
+            "group_id": update_data.get("GROUPID", record.get("GROUPID")),
+            "start": update_data.get("START", record.get("START", "")),
+            "end": update_data.get("END", record.get("END", "")),
+            "color": bgr_to_hex(color_val) if color_val else None,
+            "description": update_data.get("DESCRIPT", record.get("DESCRIPT", "")),
+        }
+
     # ── Write: Staffing Requirements (SHDEM) ──────────────────
     def set_staffing_requirement(
         self,

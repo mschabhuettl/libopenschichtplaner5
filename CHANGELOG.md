@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `update_period(period_id, data)` ändert einen gekennzeichneten Zeitraum in
+  `5PERIO.DBF` feldweise. Nur die übergebenen Schlüssel (`group_id`, `start`,
+  `end`, `color` als BGR-Int, `description`) werden geschrieben; nicht angegebene
+  Felder bleiben unverändert. Gibt den aktualisierten Satz als dict zurück bzw.
+  `None`, wenn kein Zeitraum diese ID hat. Damit lässt sich ein Zeitraum
+  bearbeiten, statt ihn löschen und neu anlegen zu müssen.
+
 ## [1.19.0] - 2026-06-28
 
 ### Added
