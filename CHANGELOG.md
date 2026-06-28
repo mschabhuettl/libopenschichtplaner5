@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.3] - 2026-06-28
+
 ### Changed
 
 - DBF-Lese-Cache invalidiert jetzt inhaltsbasiert statt nur über die mtime. Auf
@@ -506,7 +508,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.2...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.3...HEAD
+[1.14.3]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.2...v1.14.3
 [1.14.2]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.1...v1.14.2
 [1.14.1]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.0...v1.14.1
 [1.14.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.13.0...v1.14.0
