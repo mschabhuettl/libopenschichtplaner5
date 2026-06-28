@@ -117,41 +117,58 @@ def _parse_date(raw: str) -> str | None:
     return None
 
 
-def _parse_record(
-    raw: bytes, fields: list[dict], names: list[str] | None = None
-) -> dict[str, Any]:
-    """Parse one raw record byte-string into a dict.
-
-    *names* are the (deduplicated) dict keys for the fields; computed from the
-    field descriptors when not supplied. Binary C fields (``BINARY_C_FIELDS``)
-    are returned as raw unstripped ``bytes``.
-    """
-    if names is None:
-        names = _dedupe_names([str(f["name"]) for f in fields])
-
-    record: dict[str, Any] = {}
-    offset = 1  # skip deletion flag
-
+# Vorberechnete Feld-Spezifikation: (dict-Schlüssel, Typ, Länge, Nachkomma,
+# Binärfeld?, Startoffset). Wird je Tabelle EINMAL erstellt und für alle
+# Datensätze wiederverwendet — spart die früher pro Datensatz wiederholten
+# int()/str()/Set-Lookups (messbarer Gewinn beim Parsen großer Tabellen).
+def _compile_field_specs(
+    fields: list[dict], names: list[str]
+) -> list[tuple[str, str, int, int, bool, int]]:
+    specs: list[tuple[str, str, int, int, bool, int]] = []
+    offset = 1  # Lösch-Flag überspringen
     for field, fname in zip(fields, names, strict=True):
         flen = int(field["len"])
-        ftype = str(field["type"])
-        fdec = int(field["dec"])
+        specs.append(
+            (
+                fname,
+                str(field["type"]),
+                flen,
+                int(field["dec"]),
+                str(field["name"]) in BINARY_C_FIELDS,
+                offset,
+            )
+        )
+        offset += flen
+    return specs
+
+
+def _parse_record_specs(
+    raw: bytes, specs: list[tuple[str, str, int, int, bool, int]]
+) -> dict[str, Any]:
+    """Parst einen rohen Datensatz anhand vorberechneter Feld-Spezifikationen.
+
+    Identische Dekodierlogik wie früher in ``_parse_record`` — nur ohne die
+    je Datensatz wiederholte Ableitung der Felddaten. Binäre C-Felder
+    (``BINARY_C_FIELDS``) kommen als rohe, ungestrippte ``bytes`` zurück.
+    """
+    record: dict[str, Any] = {}
+    for fname, ftype, flen, fdec, is_binary, offset in specs:
         chunk = raw[offset : offset + flen]
 
         val: Any = None
         if ftype == "C":
-            if str(field["name"]) in BINARY_C_FIELDS:
-                # Binary field (D-21): raw bytes, unstripped (a stripped or
-                # latin-1-decoded MD5 digest is irreversibly mangled).
+            if is_binary:
+                # Binärfeld (D-21): rohe Bytes, ungestrippt (ein gestrippter oder
+                # latin-1-dekodierter MD5-Digest ist unwiederbringlich verfälscht).
                 val = chunk
             else:
-                # Character field - UTF-16 LE in Schichtplaner5
+                # Zeichenfeld — UTF-16 LE in Schichtplaner5
                 val = _decode_string(chunk)
         elif ftype == "D":
-            # Date field YYYYMMDD
+            # Datumsfeld YYYYMMDD
             val = _parse_date(chunk.decode("ascii", errors="replace"))
         elif ftype in ("N", "F"):
-            # Numeric/Float
+            # Numerisch/Float
             s = chunk.decode("ascii", errors="replace").strip()
             if s == "" or s == ".":
                 val = 0
@@ -161,19 +178,35 @@ def _parse_record(
                 except ValueError:
                     val = 0
         elif ftype == "L":
-            # Logical
+            # Logisch
             s = chunk.decode("ascii", errors="replace").strip()
             val = s in ("T", "t", "Y", "y", "1")
         elif ftype == "M":
-            # Memo (pointer only in .DBF, actual data in .DBT)
+            # Memo (nur Zeiger in der .DBF, eigentliche Daten in der .DBT)
             val = None
         else:
             val = chunk.decode("ascii", errors="replace").strip()
 
         record[fname] = val
-        offset += flen
 
     return record
+
+
+def _parse_record(
+    raw: bytes, fields: list[dict], names: list[str] | None = None
+) -> dict[str, Any]:
+    """Parst einen rohen Datensatz-Bytestring in ein dict.
+
+    *names* sind die (deduplizierten) dict-Schlüssel der Felder; werden aus den
+    Felddeskriptoren berechnet, wenn nicht übergeben. Binäre C-Felder
+    (``BINARY_C_FIELDS``) kommen als rohe, ungestrippte ``bytes`` zurück.
+
+    Dünner Wrapper um :func:`_parse_record_specs` für Einzeldatensatz-Aufrufer
+    (cdx_writer/dbf_writer); ``read_dbf`` berechnet die Specs einmalig selbst.
+    """
+    if names is None:
+        names = _dedupe_names([str(f["name"]) for f in fields])
+    return _parse_record_specs(raw, _compile_field_specs(fields, names))
 
 
 def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, Any]]:
@@ -226,6 +259,8 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, 
         f.seek(header_size)
         records = []
         names = _dedupe_names([str(f_["name"]) for f_ in fields])
+        # Feld-Specs einmal je Tabelle berechnen und für alle Datensätze nutzen.
+        specs = _compile_field_specs(fields, names)
 
         for _ in range(num_records):
             raw = f.read(record_size)
@@ -236,7 +271,7 @@ def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, 
             if raw[0] == 0x2A:
                 continue
 
-            records.append(_parse_record(raw, fields, names))
+            records.append(_parse_record_specs(raw, specs))
 
     return records
 

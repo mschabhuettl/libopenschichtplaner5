@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- DBF-Parser beschleunigt: Die Feld-Spezifikationen (Typ, Länge, Offset,
+  Binärfeld-Flag) werden je Tabelle nur noch einmal berechnet statt für jeden
+  Datensatz erneut. Das Einlesen großer Tabellen wird dadurch spürbar schneller
+  (~24 % weniger Parse-Zeit bei einer 15 000-Datensatz-Tabelle gemessen), was
+  vor allem das erste Laden des Dienstplans und das Neuladen nach Schreibzugriffen
+  betrifft. Die dekodierten Werte sind unverändert byte-identisch (über alle
+  Feldtypen verifiziert); rein interne Optimierung, keine API-Änderung.
+
 ## [1.14.1] - 2026-06-28
 
 ### Fixed
