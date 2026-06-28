@@ -46,6 +46,44 @@ def test_get_user_permissions(tmp_path):
     assert db.get_user_permissions(999) is None
 
 
+def test_get_user_identity_matches_login_shape(tmp_path):
+    """P-B: get_user_identity(id) liefert exakt das Login-Shape (_build_user_dict)
+    des Ziel-Users, ohne Passwort/Digest — für die Admin-Impersonation."""
+    users = [
+        {"ID": 1, "POSITION": 1, "NAME": "Admin", "DESCRIP": "", "ADMIN": 1,
+         "RIGHTS": 0, "HIDE": 0, "WDUTIES": 0, "WABSENCES": 0, "WOVERTIMES": 0,
+         "WNOTES": 0, "WDEVIATION": 0, "WCYCLEASS": 0, "WSWAPONLY": 0,
+         "WPAST": 0, "ADDEMPL": 0, "SHOWABS": 0, "SHOWNOTES": 0,
+         "SHOWSTATS": 0, "BACKUP": 0},
+        {"ID": 2, "POSITION": 2, "NAME": "Leser", "DESCRIP": "", "ADMIN": 0,
+         "RIGHTS": 0, "HIDE": 0, "WDUTIES": 0, "WABSENCES": 0, "WOVERTIMES": 0,
+         "WNOTES": 0, "WDEVIATION": 0, "WCYCLEASS": 0, "WSWAPONLY": 0,
+         "WPAST": 0, "ADDEMPL": 0, "SHOWABS": 1, "SHOWNOTES": 0,
+         "SHOWSTATS": 0, "BACKUP": 0},
+        {"ID": 3, "POSITION": 3, "NAME": "Versteckt", "DESCRIP": "", "ADMIN": 0,
+         "RIGHTS": 0, "HIDE": 1, "WDUTIES": 0, "WABSENCES": 0, "WOVERTIMES": 0,
+         "WNOTES": 0, "WDEVIATION": 0, "WCYCLEASS": 0, "WSWAPONLY": 0,
+         "WPAST": 0, "ADDEMPL": 0, "SHOWABS": 0, "SHOWNOTES": 0,
+         "SHOWSTATS": 0, "BACKUP": 0},
+    ]
+    db = make_db(tmp_path, {"5USER": users})
+    # Nicht-Admin-Ziel: identische Felder wie _build_user_dict desselben Satzes
+    raw = next(x for x in db._read("USER") if x.get("ID") == 2)
+    assert db.get_user_identity(2) == db._build_user_dict(raw)
+    ident = db.get_user_identity(2)
+    assert ident["ID"] == 2 and ident["role"] == "Leser"
+    # SHOWABS=1 (anonymisiert) → Modus 1, aber sichtbar
+    assert ident["SHOWABS_MODE"] == 1 and ident["SHOWABS"] is True
+    # Nicht-Admin trägt keine Admin-Rechte
+    assert ident["WDUTIES"] is False and ident["ACCADMWND"] is False
+    # Admin-Ziel: alle Flags True (wie beim Admin-Login)
+    assert db.get_user_identity(1)["role"] == "Admin"
+    assert db.get_user_identity(1)["WDUTIES"] is True
+    # Versteckte (HIDE) und unbekannte ID ⇒ None
+    assert db.get_user_identity(3) is None
+    assert db.get_user_identity(999) is None
+
+
 def test_verify_user_password_dict_contains_all_flags(tmp_path):
     """Das Session-Dict (_build_user_dict) enthält alle granularen Flags."""
     db = make_db(tmp_path, {"5USER": []})

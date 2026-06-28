@@ -1192,6 +1192,21 @@ class SP5Database:
         perms["showabs"] = int(r.get("SHOWABS") or 0) != 2
         return perms
 
+    def get_user_identity(self, user_id: int) -> dict | None:
+        """Identitäts-/Rechte-Dict eines Benutzers per ID — exakt das Shape, das
+        ein erfolgreicher Login liefert (``_build_user_dict``), aber OHNE das
+        Passwort/den Digest zu berühren. Für die Admin-Impersonation („Als
+        Benutzer ansehen", P-B): die API übernimmt dieses Dict als
+        Autorisierungs-Principal des Ziel-Users, sodass dessen Rolle/Rechte/
+        Sichtbarkeit gelten. Versteckte Benutzer (HIDE) und unbekannte IDs ⇒ None.
+        Bewusst kein Pfad durch ``verify_user_password``, damit die Login-/
+        Digest-Prüfung (Multi-Encoding, 1.14.1) unberührt bleibt."""
+        r = next(
+            (x for x in self._read("USER") if x.get("ID") == user_id and not x.get("HIDE")),
+            None,
+        )
+        return self._build_user_dict(r) if r is not None else None
+
     def verify_user_password(self, name: str, password: str) -> dict | None:
         """Verify username+password, return user dict (without hash) or None.
 
