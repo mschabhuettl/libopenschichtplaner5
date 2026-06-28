@@ -96,3 +96,35 @@ def test_verify_user_password_dict_contains_all_flags(tmp_path):
     # Planer-Defaults aus create_user: Schreibflags 1, ADDEMPL 0 (Opt-in)
     assert user["WDUTIES"] is True
     assert user["ADDEMPL"] is False
+
+
+def test_create_user_honours_explicit_permission_overrides(tmp_path):
+    """Lücke #1: einzelne 5USER-Schreibrechte überschreiben die Rollen-Defaults."""
+    db = make_db(tmp_path, {"5USER": []})
+    rec = db.create_user({
+        "NAME": "feinplaner", "PASSWORD": "geheim123", "role": "Planer",
+        "WPAST": False, "WSWAPONLY": True, "ADDEMPL": True,
+    })
+    perms = db.get_user_permissions(rec["ID"])
+    assert perms["wduties"] is True       # Rollen-Default bleibt
+    assert perms["wpast"] is False        # explizit aus
+    assert perms["wswaponly"] is True     # explizit an
+    assert perms["addempl"] is True       # explizit an
+
+
+def test_update_user_honours_explicit_permission_overrides(tmp_path):
+    db = make_db(tmp_path, {"5USER": []})
+    uid = db.create_user(
+        {"NAME": "u1", "PASSWORD": "geheim123", "role": "Planer"}
+    )["ID"]
+    # ohne Rolle: einzelne Flags ändern
+    db.update_user(uid, {"WABSENCES": False, "ADDEMPL": True})
+    perms = db.get_user_permissions(uid)
+    assert perms["wabsences"] is False
+    assert perms["addempl"] is True
+    assert perms["wduties"] is True       # unberührt
+    # mit Rolle Leser (Default 0) + explizit WNOTES True → explizit gewinnt
+    db.update_user(uid, {"role": "Leser", "WNOTES": True})
+    perms = db.get_user_permissions(uid)
+    assert perms["wnotes"] is True
+    assert perms["wduties"] is False      # Leser-Default

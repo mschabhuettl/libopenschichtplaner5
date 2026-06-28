@@ -1011,6 +1011,11 @@ class SP5Database:
             "HIDE": 0,
             "RESERVED": "",
         }
+        # Granulare Schreibrechte explizit übersteuern (Spec 9.6): überschreibt
+        # die rollenbasierten Defaults, falls im data-Dict angegeben.
+        for field in self._WRITE_PERMISSION_FIELDS:
+            if field in data:
+                record[field] = 1 if data[field] else 0
         append_record(filepath, fields, record)
         # Store bcrypt hash in sidecar file
         if password:
@@ -1067,6 +1072,12 @@ class SP5Database:
             except (TypeError, ValueError):
                 mode = 0
             update_data["SHOWABS"] = mode if mode in (0, 1, 2) else 0
+        # Granulare Schreibrechte explizit übersteuern (Spec 9.6): überschreibt
+        # die oben aus der Rolle abgeleiteten Defaults, falls angegeben. Steht
+        # bewusst NACH dem role-Block, damit explizite Flags Vorrang haben.
+        for field in self._WRITE_PERMISSION_FIELDS:
+            if field in data:
+                update_data[field] = 1 if data[field] else 0
 
         update_record(filepath, fields, raw_idx, update_data)
 
@@ -1171,6 +1182,15 @@ class SP5Database:
         "showstats": "SHOWSTATS",
         "backup": "BACKUP",
     }
+
+    # Granulare 5USER-Schreibrechte (Spec 9.6), die in create_user/update_user
+    # explizit übersteuerbar sind und die rollenbasierten Defaults überschreiben.
+    # SHOW*/SHOWABS sind Anzeige-/Sichtbarkeitsflags und hier bewusst NICHT
+    # enthalten (SHOWABS wird separat dreiwertig behandelt).
+    _WRITE_PERMISSION_FIELDS = (
+        "WDUTIES", "WABSENCES", "WOVERTIMES", "WNOTES", "WDEVIATION",
+        "WCYCLEASS", "WSWAPONLY", "WPAST", "ADDEMPL", "BACKUP",
+    )
 
     def get_user_permissions(self, user_id: int) -> dict | None:
         """Granulare 5USER-Flags eines Benutzers (Spec 9.6) als

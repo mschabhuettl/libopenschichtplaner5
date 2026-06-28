@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create_user`/`update_user`: einzelne 5USER-Schreibrechte (WDUTIES, WABSENCES,
+  WOVERTIMES, WNOTES, WDEVIATION, WCYCLEASS, WSWAPONLY, WPAST, ADDEMPL, BACKUP)
+  sind nun explizit setzbar und überschreiben die rollenbasierten Defaults. Wird
+  ein Flag im Daten-Dict übergeben, hat es Vorrang vor dem aus der Rolle
+  abgeleiteten Standard (Spec 9.6). Anzeige-/Sichtbarkeitsflags (SHOW*) bleiben
+  davon unberührt (`_WRITE_PERMISSION_FIELDS`).
+
 ## [1.15.0] - 2026-06-28
 
 ### Added
