@@ -42,6 +42,11 @@ _db_logger = logging.getLogger("sp5api")
 # RLock (re-entrant) because _read() and _invalidate_cache() may be called
 # from the same thread (e.g. write path calls _invalidate_cache then _read).
 _GLOBAL_DBF_CACHE: dict[tuple, tuple] = {}
+# Lese-Schicht über dem DBF-Cache: (db_path, table, date_field) → (mtime,
+# {YYYY-MM: [records]}). Gruppiert datierte Tabellen (5MASHI) nach Monat, damit
+# get_schedule nur den angefragten Monat statt der ganzen Tabelle scannt. An die
+# gleiche mtime gekoppelt wie _GLOBAL_DBF_CACHE → konsistent invalidiert.
+_GLOBAL_MONTH_INDEX: dict[tuple, tuple] = {}
 _CACHE_LOCK = threading.RLock()
 
 
@@ -130,6 +135,39 @@ class SP5Database:
             _GLOBAL_DBF_CACHE[key] = (mtime, data)
         return data
 
+    def _read_by_month(
+        self, name: str, date_field: str = "DATE"
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Datensätze einer datierten Tabelle nach Monats-Präfix (YYYY-MM) gruppiert.
+
+        Reine Lese-Schicht über :meth:`_read`: an dieselbe mtime gekoppelt und
+        daher mit dem DBF-Cache konsistent (Schreibzugriff ändert die mtime →
+        Neuaufbau). Erspart get_schedule den Volltabellen-Scan pro Request — der
+        Index wird je Tabelle einmal gebaut und über Requests wiederverwendet.
+        Datumswerte sind ISO-zero-padded (YYYY-MM-DD), daher ist ``d[:7]`` exakt
+        der Monats-Präfix, gegen den get_schedule früher mit ``startswith`` filterte.
+        """
+        path = self._table(name)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0.0
+        key = (self.db_path, name, date_field)
+        with _CACHE_LOCK:
+            cached = _GLOBAL_MONTH_INDEX.get(key)
+            if cached is not None and cached[0] == mtime:
+                return cached[1]
+
+        index: dict[str, list[dict[str, Any]]] = {}
+        for r in self._read(name):
+            d = r.get(date_field) or ""
+            if len(d) >= 7:
+                index.setdefault(d[:7], []).append(r)
+
+        with _CACHE_LOCK:
+            _GLOBAL_MONTH_INDEX[key] = (mtime, index)
+        return index
+
     def _invalidate_cache(self, name: str) -> None:
         """Invalidate the global cache for a table after a write operation.
 
@@ -140,6 +178,10 @@ class SP5Database:
         key = (self.db_path, name)
         with _CACHE_LOCK:
             _GLOBAL_DBF_CACHE.pop(key, None)
+            # Den abgeleiteten Monatsindex derselben Tabelle miträumen
+            # (mehrere date_field-Varianten möglich).
+            for ik in [k for k in _GLOBAL_MONTH_INDEX if k[0] == self.db_path and k[1] == name]:
+                _GLOBAL_MONTH_INDEX.pop(ik, None)
 
     def _color_fields(self, record: dict) -> dict:
         """Convert BGR color fields to hex strings."""
@@ -473,10 +515,11 @@ class SP5Database:
         prefix = f"{year:04d}-{month:02d}"
         entries = []
 
-        # Get shift assignments (MASHI)
-        for r in self._read("MASHI"):
+        # Get shift assignments (MASHI) — nur den angefragten Monat (Monatsindex
+        # statt Volltabellen-Scan; identische Auswahl wie d.startswith(prefix)).
+        for r in self._read_by_month("MASHI").get(prefix, []):
             d = r.get("DATE", "")
-            if d and d.startswith(prefix):
+            if d:
                 entries.append(
                     {
                         "employee_id": r.get("EMPLOYEEID"),

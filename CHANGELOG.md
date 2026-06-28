@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vor allem das erste Laden des Dienstplans und das Neuladen nach Schreibzugriffen
   betrifft. Die dekodierten Werte sind unverändert byte-identisch (über alle
   Feldtypen verifiziert); rein interne Optimierung, keine API-Änderung.
+- `get_schedule` liest die Schicht-Zuordnungen (5MASHI) jetzt über einen nach
+  Monat gruppierten Index statt die gesamte Tabelle pro Aufruf zu durchsuchen.
+  Der Index ist eine reine Lese-Schicht über dem mtime-DBF-Cache und wird bei
+  jedem Schreibzugriff konsistent invalidiert; die Ausgabe ist unverändert (über
+  24 Monate × 3 Plan-Sichten, 30 660 Einträge byte-identisch verifiziert). Warm
+  ~37 % schneller (2,42 → 1,53 ms je Monatsabruf bei 15 000 Datensätzen); der
+  Vorteil wächst mit der Tabellengröße.
 
 ## [1.14.1] - 2026-06-28
 
