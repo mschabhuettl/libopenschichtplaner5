@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_user_identity(user_id)`: liefert das Identitäts-/Rechte-Dict eines Benutzers
+  per ID im selben Shape wie ein erfolgreicher Login (`_build_user_dict`), aber ohne
+  Passwort/Digest zu prüfen. Grundlage für die Admin-Impersonation („Als Benutzer
+  ansehen") in der API: der Ziel-User wird als Autorisierungs-Principal übernommen,
+  sodass dessen Rolle/Rechte/Sichtbarkeit gelten. Versteckte (HIDE) und unbekannte
+  Benutzer ⇒ `None`. Der Login-/Digest-Pfad bleibt unberührt.
+
 ## [1.14.4] - 2026-06-28
 
 ### Fixed
