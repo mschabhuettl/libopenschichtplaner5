@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-06-28
+
 ### Added
 
 - `get_schedule(...)` liefert für Abwesenheiten jetzt `interval`, `start_time` und
@@ -448,7 +450,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.13.0...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.12.2...v1.13.0
 [1.12.2]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.12.1...v1.12.2
 [1.12.1]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.12.0...v1.12.1
