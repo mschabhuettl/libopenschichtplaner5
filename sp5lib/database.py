@@ -1580,8 +1580,19 @@ class SP5Database:
                 return a
         return None
 
-    def assign_cycle(self, employee_id: int, cycle_id: int, start_date: str) -> dict:
-        """Assign a cycle to an employee (append to CYASS)."""
+    def assign_cycle(
+        self,
+        employee_id: int,
+        cycle_id: int,
+        start_date: str,
+        end_date: str | None = None,
+    ) -> dict:
+        """Assign a cycle to an employee (append to CYASS).
+
+        ``end_date`` (5CYASS.END) befristet die Zuordnung: die Zyklus-Expansion
+        erzeugt nur bis einschließlich dieses Datums Dienste (siehe
+        ``expand_cycle_assignments``). Ohne End-Datum gilt die Zuordnung offen.
+        """
         filepath = self._table("CYASS")
         fields = get_table_fields(filepath)
         existing = read_dbf(filepath)
@@ -1592,7 +1603,7 @@ class SP5Database:
             "EMPLOYEEID": employee_id,
             "CYCLEID": cycle_id,
             "START": start_date,
-            "END": "",
+            "END": end_date or "",
             "ENTRANCE": start_date,
             "RESERVED": "",
         }
@@ -1602,7 +1613,7 @@ class SP5Database:
             "employee_id": employee_id,
             "cycle_id": cycle_id,
             "start": start_date,
-            "end": "",
+            "end": end_date or "",
         }
 
     def remove_cycle_assignment(self, employee_id: int) -> int:

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `assign_cycle` akzeptiert ein optionales `end_date` und schreibt es nach
+  `5CYASS.END`. Damit lässt sich eine Schichtmodell-Zuordnung befristen: die
+  Zyklus-Expansion erzeugt nur bis einschließlich dieses Datums Dienste (das
+  Expandieren berücksichtigte `END` bereits). Ohne Ende bleibt die Zuordnung offen.
+
 ## [1.17.0] - 2026-06-28
 
 ### Added
