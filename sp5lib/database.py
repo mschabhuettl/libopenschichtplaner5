@@ -546,6 +546,11 @@ class SP5Database:
         for r in self._read("ABSEN"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
+                # Teiltags-Abwesenheit (Spec 3.5.2/D-54): INTERVAL 0=ganz, 1=vorm.,
+                # 2=nachm., 3=stundenweise mit START/END (Minuten ab Mitternacht).
+                # Mitgeliefert (A10), damit das Raster Teiltage erkennt und Undo/Move
+                # die Granularität erhalten kann (sonst kommt sie als ganztägig zurück).
+                interval = int(r.get("INTERVAL") or 0)
                 entries.append(
                     {
                         "employee_id": r.get("EMPLOYEEID"),
@@ -554,6 +559,9 @@ class SP5Database:
                         "shift_id": None,
                         "workplace_id": None,
                         "leave_type_id": r.get("LEAVETYPID"),
+                        "interval": interval,
+                        "start_time": int(r.get("START") or 0) if interval == 3 else 0,
+                        "end_time": int(r.get("END") or 0) if interval == 3 else 0,
                     }
                 )
 

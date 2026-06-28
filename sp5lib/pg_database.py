@@ -763,11 +763,15 @@ class SP5PostgresDatabase:
                     "color_bk": bgr_to_hex(r.colorbk) if r.colorbk else None,
                     "color_text": bgr_to_hex(r.colortext) if r.colortext else None,
                 })
-            # ABSEN
+            # ABSEN (Teiltage A10: interval/start_time/end_time wie im DBF-Backend)
             for r in s.scalars(select(Absence).where(Absence.date.startswith(prefix))).all():
+                interval = int(r.interval or 0)
                 entries.append({
                     "employee_id": r.employee_id, "date": r.date, "kind": "absence",
                     "shift_id": None, "workplace_id": None, "leave_type_id": r.leave_type_id,
+                    "interval": interval,
+                    "start_time": int(r.start or 0) if interval == 3 else 0,
+                    "end_time": int(r.end or 0) if interval == 3 else 0,
                 })
 
         shifts_map = {sh["ID"]: sh for sh in self.get_shifts(include_hidden=True)}

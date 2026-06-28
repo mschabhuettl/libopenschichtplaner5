@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_schedule(...)` liefert für Abwesenheiten jetzt `interval`, `start_time` und
+  `end_time` mit (Teiltage, Spec 3.5.2/D-54: 0=ganz, 1=vorm., 2=nachm., 3=stundenweise
+  mit Minuten ab Mitternacht) — DBF- und PostgreSQL-Backend gleichermaßen. Damit kann
+  der Dienstplan Teiltags-Abwesenheiten erkennen und beim Wiederherstellen/Verschieben
+  einer Zelle die Granularität erhalten (A10), statt sie als ganztägig zurückzugeben.
+
 ## [1.13.0] - 2026-06-16
 
 ### Added

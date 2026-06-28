@@ -68,3 +68,27 @@ def test_partial_absence_feeds_calculation(tmp_path):
     db.add_absence(1, "2014-12-02", 1, interval=3, start=480, end=720)  # 4 h
     stats = db.get_statistics(2014, 12)
     assert stats[0]["actual_hours"] == pytest.approx(7.7 * 0.5 + 4.0)
+
+
+def test_get_schedule_surfaces_partial_day(tmp_path):
+    """A10: get_schedule liefert interval/start_time/end_time je Abwesenheit mit,
+    damit das Raster Teiltage erkennt und Undo/Move die Granularität erhält."""
+    db = _absence_db(tmp_path)
+    db.add_absence(1, "2014-06-02", 1, interval=1)  # Vormittag
+    db.add_absence(1, "2014-06-03", 1, interval=3, start=480, end=720)  # stundenweise
+    db.add_absence(1, "2014-06-04", 1)  # ganztägig
+
+    by_date = {
+        e["date"]: e
+        for e in db.get_schedule(year=2014, month=6)
+        if e["kind"] == "absence"
+    }
+    assert (by_date["2014-06-02"]["interval"],
+            by_date["2014-06-02"]["start_time"],
+            by_date["2014-06-02"]["end_time"]) == (1, 0, 0)
+    assert (by_date["2014-06-03"]["interval"],
+            by_date["2014-06-03"]["start_time"],
+            by_date["2014-06-03"]["end_time"]) == (3, 480, 720)
+    assert (by_date["2014-06-04"]["interval"],
+            by_date["2014-06-04"]["start_time"],
+            by_date["2014-06-04"]["end_time"]) == (0, 0, 0)
