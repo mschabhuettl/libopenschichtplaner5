@@ -689,6 +689,36 @@ class SP5Database:
 
         return hashlib.md5(password.encode("utf-8")).digest()
 
+    # The original Schichtplaner5 (Delphi/Windows) stores each password as an
+    # unsalted 16-byte MD5 digest in 5USER.DIGEST. Its own login routine
+    # (SP5Data.dll FUN_100431a0) verifies a typed password against the stored
+    # digest under TWO encodings: the Delphi WideString (UTF-16-LE) first, then,
+    # on mismatch, the system ANSI codepage (CP1252 on a German Windows, via
+    # WideCharToMultiByte/AtlGetThreadACP). The set-password routine writes the
+    # UTF-16-LE digest, while pre-Unicode (Delphi <2009) builds wrote the ANSI
+    # one — so a real DB mixes both (sample DB: Bartel "a" = MD5(b"a") ANSI vs
+    # Leitung "a" = MD5(b"a\x00") UTF-16-LE). We replicate that dual-encoding
+    # check and also accept UTF-8 because our own writer (_hash_password_md5)
+    # emits UTF-8 (== CP1252 for ASCII). A successful legacy login migrates to
+    # bcrypt, so this only matters for the first login of an unmigrated account.
+    _LEGACY_MD5_ENCODINGS = ("utf-8", "cp1252", "utf-16-le")
+
+    def _legacy_md5_encoding(self, password: str, digest_bytes: bytes) -> str | None:
+        """Return the encoding under which MD5(password) equals the stored 16-byte
+        digest, or None if none match. See ``_LEGACY_MD5_ENCODINGS``."""
+        import hashlib
+
+        if len(digest_bytes) != 16:
+            return None
+        for enc in self._LEGACY_MD5_ENCODINGS:
+            try:
+                candidate = password.encode(enc)
+            except (UnicodeEncodeError, LookupError):
+                continue
+            if hashlib.md5(candidate).digest() == digest_bytes:
+                return enc
+        return None
+
     # ── Bcrypt sidecar store ──────────────────────────────────
     # Bcrypt hashes are 60 chars and don't fit the 16-byte DIGEST field in
     # 5USER.DBF, so we store them in a JSON sidecar file next to the DBF.
@@ -1100,8 +1130,6 @@ class SP5Database:
         2. Fall back to legacy MD5 digest in DBF
         3. If MD5 matches → auto-migrate to bcrypt on this login
         """
-        import hashlib
-
         import bcrypt as _bcrypt
 
         rows = self._read("USER")
@@ -1134,16 +1162,19 @@ class SP5Database:
             else:
                 continue
 
-            expected_bytes = hashlib.md5(password.encode("utf-8")).digest()
-            if digest_bytes == expected_bytes:
+            matched_encoding = self._legacy_md5_encoding(password, digest_bytes)
+            if matched_encoding is not None:
                 # ── 3. Auto-migrate to bcrypt on successful MD5 login ──
+                # matched_encoding lands in the operator log so a real-DB login
+                # path (e.g. "matched via utf-16-le") is visible without the password.
                 try:
                     new_hash = self._hash_password_bcrypt(password)
                     self._save_bcrypt_hash(user_id, new_hash)
                     _db_logger.info(
-                        "PASSWORD_MIGRATED | user_id=%d user=%s (MD5 → bcrypt)",
+                        "PASSWORD_MIGRATED | user_id=%d user=%s (MD5[%s] → bcrypt)",
                         user_id,
                         r.get("NAME", ""),
+                        matched_encoding,
                     )
                 except Exception as e:
                     _db_logger.warning("Bcrypt migration failed for user %d: %s", user_id, e)
@@ -1153,11 +1184,21 @@ class SP5Database:
 
     def login_diagnostics(self, name: str) -> dict:
         """Privacy-safe diagnostics for a *failed* login — never touches/returns
-        the password. Lets an operator explain a real-DB login edge case from the
-        server logs (e.g. unexpected digest format, bcrypt-only account, hidden
-        user). Returns: user_found, hidden, digest_len, digest_is_md5_shape,
-        has_bcrypt.
+        the password or the raw digest. Lets an operator explain a real-DB login
+        edge case from the server logs. Returns: user_found, hidden, digest_len,
+        digest_is_md5_shape, digest_all_zero, digest_is_empty_md5, has_bcrypt,
+        encodings_tried.
+
+        Reading the signature: a 16-byte non-zero MD5 that no encoding matched
+        (digest_is_md5_shape=true, digest_all_zero=false, has_bcrypt=false) means
+        the typed password is wrong (or, on an old build, used an unsupported
+        codepage). digest_all_zero=true = no password set / account disabled.
+        digest_is_empty_md5=true = the account's password is blank (logs in with
+        an empty password — original SP5 parity, e.g. the sample "Admin").
         """
+        import hashlib
+
+        empty_md5 = hashlib.md5(b"").digest()
         try:
             rows = self._read("USER")
             bcrypt_hashes = self._load_bcrypt_hashes()
@@ -1169,17 +1210,21 @@ class SP5Database:
                 continue
             digest = r.get("DIGEST", "")
             if isinstance(digest, bytes):
-                digest_len = len(digest)
+                digest_bytes = digest
             elif isinstance(digest, str):
-                digest_len = len(digest.encode("latin-1"))
+                digest_bytes = digest.encode("latin-1")
             else:
-                digest_len = 0
+                digest_bytes = b""
+            digest_len = len(digest_bytes)
             return {
                 "user_found": True,
                 "hidden": bool(r.get("HIDE")),
                 "digest_len": digest_len,
                 "digest_is_md5_shape": digest_len == 16,
+                "digest_all_zero": digest_len == 16 and digest_bytes == b"\x00" * 16,
+                "digest_is_empty_md5": digest_bytes == empty_md5,
                 "has_bcrypt": str(r.get("ID")) in bcrypt_hashes,
+                "encodings_tried": list(self._LEGACY_MD5_ENCODINGS),
             }
         return {"user_found": False}
 

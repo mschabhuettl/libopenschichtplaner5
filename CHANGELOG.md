@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Login mit Original-5USER-Konten, deren Passwort eine andere Byte-Kodierung als
+  reines ASCII nutzt: Schichtplaner5 (Delphi/Windows) prüft das Passwort gegen den
+  gespeicherten MD5-Digest unter zwei Kodierungen — Delphi-WideString (UTF-16-LE)
+  und System-ANSI (CP1252) — während diese Bibliothek nur `MD5(utf-8)` verglich.
+  Dadurch konnten sich Konten mit UTF-16-LE-Digest (z. B. das Beispielkonto
+  „Leitung") oder mit Umlaut-Passwörtern (CP1252) nie anmelden, ASCII-Passwörter
+  dagegen schon (utf-8 == cp1252). `verify_user_password` probiert die Kodierungen
+  jetzt durch (`utf-8`, `cp1252`, `utf-16-le`) und akzeptiert bei jedem Treffer; ein
+  erfolgreicher Legacy-Login wird wie bisher auf bcrypt migriert. Falsche Passwörter
+  werden weiterhin abgewiesen.
+
+### Added
+
+- `login_diagnostics` meldet zusätzlich `digest_all_zero` (kein Passwort gesetzt /
+  Konto deaktiviert), `digest_is_empty_md5` (leeres Passwort — Original-Parität) und
+  `encodings_tried`; bei erfolgreichem Legacy-Login nennt das Migrations-Log die
+  zutreffende Kodierung (`MD5[utf-16-le] → bcrypt`). Privacy-safe — nie das Passwort
+  oder den rohen Digest.
+
 ## [1.14.0] - 2026-06-28
 
 ### Added
