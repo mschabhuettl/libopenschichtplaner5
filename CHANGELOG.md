@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Zeitkonto-Jahresübersicht (`get_zeitkonto`) deutlich schneller bei echter
+  Datenmenge.** Die Übersicht baute die Berechnungs-Eingaben (`_calc_inputs`:
+  Bewegungsdaten 5MASHI/5SPSHI/5ABSEN/5BOOK/5OVER, Feiertage, Schicht-/
+  Abwesenheitsdefinitionen, Zyklus-Expansion) bisher **pro Mitarbeiter neu** —
+  bei N Mitarbeitern also N volle Tabellen-Scans je Bewegungstabelle (O(N×Tabelle)).
+  Jetzt werden die Eingaben **einmal für alle Mitarbeiter** gebaut und je MA nur
+  noch zerschnitten (neuer Helfer `_time_balance_from_inputs`, den auch die
+  Einzelberechnung `calculate_time_balance` nutzt). Messung an 30 MA / 15 330
+  5MASHI-Sätzen (2 Jahre): **106,6 → 49,3 ms je Aufruf (~2,2×)**; der Vorteil
+  wächst mit der Mitarbeiterzahl. **Verhaltenswahrend:** Ausgabe byte-identisch
+  über beide Jahre, Gruppenfilter und alle 30 Einzel-Zeitkonten (0 Abweichungen
+  gegen die alte Logik); DBF- und Postgres-Backend bleiben äquivalent
+  (`test_pg_calculations`); neuer Invariant-Test
+  `test_zeitkonto_matches_per_employee_balance` (Revert→rot bestätigt).
+
 ## [1.23.0] - 2026-06-29
 
 ### Fixed

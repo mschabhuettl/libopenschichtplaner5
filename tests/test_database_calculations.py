@@ -227,6 +227,49 @@ def test_over_flows_into_overtime_account_not_saldo(tmp_path):
     assert balance["total_overtime_account"] == pytest.approx(7.0)
 
 
+def test_zeitkonto_matches_per_employee_balance(tmp_path):
+    """get_zeitkonto baut die Berechnungs-Eingaben EINMAL für alle Mitarbeiter und
+    zerschneidet sie je MA (ein Scan je Bewegungstabelle statt einer pro MA). Das
+    Ergebnis muss exakt der Einzelberechnung calculate_time_balance entsprechen.
+    Schützt gegen eine falsche MA-Zuordnung beim gemeinsamen Scan — mit je MA
+    bewusst UNTERSCHIEDLICHer Datenmenge, damit eine Verwechslung auffällt.
+    """
+    emp1 = dict(EMP_WEEK, ID=1, NAME="Alpha", SHORTNAME="AL", POSITION=1)
+    emp2 = dict(EMP_WEEK, ID=2, NAME="Beta", SHORTNAME="BE", POSITION=2)
+    emp3 = dict(EMP_WEEK, ID=3, NAME="Gamma", SHORTNAME="GA", POSITION=3)
+    krank = dict(URLAUB, ID=3, NAME="Krankheit", SHORTNAME="K", ENTITLED=0,
+                 CARRYFWD=0, STDENTIT=0.0)
+    db = make_db(tmp_path, {
+        "5EMPL": [emp1, emp2, emp3],
+        "5SHIFT": [DAY_SHIFT],
+        "5LEAVT": [krank],
+        "5MASHI": [
+            {"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 1, "DATE": "2025-01-06"},  # Alpha 1×
+            {"ID": 2, "EMPLOYEEID": 2, "SHIFTID": 1, "DATE": "2025-02-03"},  # Beta 3×
+            {"ID": 3, "EMPLOYEEID": 2, "SHIFTID": 1, "DATE": "2025-02-04"},
+            {"ID": 4, "EMPLOYEEID": 2, "SHIFTID": 1, "DATE": "2025-02-05"},
+            {"ID": 5, "EMPLOYEEID": 3, "SHIFTID": 1, "DATE": "2025-03-03"},  # Gamma 2×
+            {"ID": 6, "EMPLOYEEID": 3, "SHIFTID": 1, "DATE": "2025-03-04"},
+        ],
+        "5ABSEN": [{"ID": 1, "EMPLOYEEID": 2, "DATE": "2025-02-06", "LEAVETYPID": 3,
+                    "TYPE": 0, "INTERVAL": 0, "START": 0, "END": 0}],  # nur Beta krank
+        "5BOOK": [{"ID": 1, "EMPLOYEEID": 3, "DATE": "2025-03-10", "TYPE": 2,
+                   "VALUE": 5.0, "NOTE": ""}],  # nur Gamma Überstundenbuchung
+    })
+    rows = {r["employee_id"]: r for r in db.get_zeitkonto(year=2025)}
+    assert set(rows) == {1, 2, 3}
+    for eid in (1, 2, 3):
+        bal = db.calculate_time_balance(eid, 2025)
+        z = rows[eid]
+        for k in ("total_target_hours", "total_actual_hours", "total_difference",
+                  "total_adjustment", "total_saldo"):
+            assert z[k] == bal[k], f"emp {eid} {k}: {z[k]} != {bal[k]}"
+    # Datenmenge je MA wirklich verschieden — sonst bliebe eine Verwechslung unsichtbar.
+    assert rows[1]["total_actual_hours"] != rows[2]["total_actual_hours"]
+    assert rows[2]["total_actual_hours"] != rows[3]["total_actual_hours"]
+    assert rows[3]["total_adjustment"] == pytest.approx(5.0)  # Gammas Buchung korrekt zugeordnet
+
+
 def test_carry_forward_is_type0_booking(tmp_path):
     """Spec 3.6.2 Nr. 6: Übertrag = TYPE-0-Buchung am 1.1.; TYPE=2 bleibt frei."""
     db = make_db(tmp_path, {"5EMPL": [EMP_WEEK], "5BOOK": []})

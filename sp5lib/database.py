@@ -5461,11 +5461,23 @@ class SP5Database:
         emp = self.get_employee(employee_id)
         if not emp:
             return {}
-
-        ctx = self._calc_context(emp)
         von = date(year, 1, 1)
         bis = date(year, 12, 31)
         inputs = self._calc_inputs(von, bis, employee_id)
+        return self._time_balance_from_inputs(emp, year, inputs)
+
+    def _time_balance_from_inputs(self, emp: dict, year: int, inputs: dict) -> dict:
+        """Monats-Bilanz eines Mitarbeiters aus bereits gebauten _calc_inputs.
+
+        Trennt die Berechnung von der Eingaben-Beschaffung, damit get_zeitkonto
+        die Eingaben EINMAL für alle Mitarbeiter bauen kann (ein Scan je
+        Bewegungstabelle statt einer pro Mitarbeiter) und sie hier nur je
+        Mitarbeiter zerschneidet. Ergebnis identisch zur Einzelberechnung.
+        """
+        employee_id = emp["ID"]
+        ctx = self._calc_context(emp)
+        von = date(year, 1, 1)
+        bis = date(year, 12, 31)
         plan = self._plan_kwargs(inputs, employee_id)
         absences = inputs["absences"].get(employee_id, [])
         bookings = inputs["bookings"].get(employee_id, [])
@@ -5580,9 +5592,13 @@ class SP5Database:
         if employee_id is not None:
             employees = [e for e in employees if e["ID"] == employee_id]
 
+        von = date(year, 1, 1)
+        bis = date(year, 12, 31)
+        inputs = self._calc_inputs(von, bis, None)
+
         result = []
         for emp in employees:
-            balance = self.calculate_time_balance(emp["ID"], year)
+            balance = self._time_balance_from_inputs(emp, year, inputs)
             if balance:
                 result.append(
                     {

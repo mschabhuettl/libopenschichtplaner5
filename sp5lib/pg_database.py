@@ -222,6 +222,7 @@ class SP5PostgresDatabase:
     # Daten zu — die Wiederverwendung derselben Funktionsobjekte hält beide
     # Backends per Konstruktion äquivalent (geprüft in test_pg_calculations).
     calculate_time_balance = SP5Database.calculate_time_balance
+    _time_balance_from_inputs = SP5Database._time_balance_from_inputs
     get_zeitkonto = SP5Database.get_zeitkonto
     get_employee_stats_year = SP5Database.get_employee_stats_year
     get_employee_stats_month = SP5Database.get_employee_stats_month
