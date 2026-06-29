@@ -748,12 +748,29 @@ class SP5Database:
         return node
 
     # ── Users ──────────────────────────────────────────────────
+    @staticmethod
+    def _rights_is_readonly(r: dict) -> bool:
+        """True wenn 5USER.RIGHTS einen reinen Lesemodus kodiert.
+
+        5USER.RIGHTS ist KEIN Boolean, sondern der Berechtigungs-MODUS (Original
+        ``SP5Data.dll`` FUN_10043890 / FUN_100435a0, Handbuch „BenutzerErfassen"):
+          0 = Lese- und Schreibrechte für alle Daten   → schreibberechtigt
+          1 = Nur-Leserechte für alle Daten            → read-only
+          2 = Differenzierte Rechte (pro Gruppe/MA)     → teil-schreibberechtigt
+          3 = (wie 1) ohne Schreibzugriff              → read-only
+        """
+        return int(r.get("RIGHTS") or 0) in (1, 3)
+
     def _role_from_record(self, r: dict) -> str:
         if r.get("ADMIN"):
             return "Admin"
-        if r.get("RIGHTS") == 1:
-            return "Planer"
-        return "Leser"
+        # RIGHTS=0 (voll) und =2 (differenziert) sind mindestens „Planer";
+        # nur RIGHTS=1/3 (Nur-Leserechte) sind „Leser". Früher prüfte der Code
+        # invertiert ``RIGHTS == 1 → Planer`` und stufte echte Planer (RIGHTS 0/2)
+        # fälschlich als Leser ein.
+        if self._rights_is_readonly(r):
+            return "Leser"
+        return "Planer"
 
     def _hash_password_md5(self, password: str) -> bytes:
         """Return 16-byte MD5 digest of password (legacy, matches 5USER.DBF DIGEST field)."""
@@ -971,7 +988,11 @@ class SP5Database:
 
         role = data.get("role", "Leser")
         is_admin = 1 if role == "Admin" else 0
-        rights = 1 if role == "Planer" else 0
+        # 5USER.RIGHTS ist der Berechtigungs-MODUS (Original): 0 = volle Lese-/
+        # Schreibrechte (Planer), 1 = Nur-Leserechte (Leser). Admin nutzt ADMIN=1
+        # (RIGHTS bleibt 0). Früher wurde hier invertiert RIGHTS=1 für „Planer"
+        # geschrieben — inkonsistent zur Original-Bedeutung (1 = read-only).
+        rights = 1 if role == "Leser" else 0
 
         password = data.get("PASSWORD", "")
         digest = self._hash_password_md5(password) if password else b"\x00" * 16
@@ -1050,7 +1071,8 @@ class SP5Database:
         if "role" in data:
             role = data["role"]
             update_data["ADMIN"] = 1 if role == "Admin" else 0
-            update_data["RIGHTS"] = 1 if role == "Planer" else 0
+            # RIGHTS = Modus: 1 = Nur-Leserechte (Leser), 0 = voll (Planer/Admin).
+            update_data["RIGHTS"] = 1 if role == "Leser" else 0
             write_perms = 1 if role in ("Admin", "Planer") else 0
             update_data["WDUTIES"] = write_perms
             update_data["WABSENCES"] = write_perms
@@ -1134,6 +1156,21 @@ class SP5Database:
         # For unknown actions, only allow admin
         return bool(user.get("ADMIN"))
 
+    def _effective_write_perm(self, r: dict, field: str, is_admin: bool) -> bool:
+        """Effektives Schreibrecht *field* unter Berücksichtigung von 5USER.RIGHTS.
+
+        Admin ⇒ immer True. Im Nur-Lesemodus (RIGHTS 1/3, siehe
+        :meth:`_rights_is_readonly`) ⇒ immer False — das Original verweigert dort
+        jeden Schreibzugriff, auch wenn die gespeicherten W*-Flags (Altbestand) noch
+        gesetzt sind. Sonst (RIGHTS 0 voll / 2 differenziert) gilt das gespeicherte
+        Flag (der Gruppen-/MA-Scope wird separat über 5GRACC/5EMACC geprüft).
+        """
+        if is_admin:
+            return True
+        if self._rights_is_readonly(r):
+            return False
+        return bool(r.get(field))
+
     def _build_user_dict(self, r: dict) -> dict:
         """Build a sanitized user dict from a raw DBF record (no hash fields)."""
         role = self._role_from_record(r)
@@ -1145,18 +1182,18 @@ class SP5Database:
             "ADMIN": bool(r.get("ADMIN")),
             "RIGHTS": r.get("RIGHTS", 0),
             "role": role,
-            "WDUTIES": bool(r.get("WDUTIES")) if not is_admin else True,
-            "WABSENCES": bool(r.get("WABSENCES")) if not is_admin else True,
-            "WOVERTIMES": bool(r.get("WOVERTIMES")) if not is_admin else True,
-            "WNOTES": bool(r.get("WNOTES")) if not is_admin else True,
-            "WDEVIATION": bool(r.get("WDEVIATION")) if not is_admin else True,
-            "WCYCLEASS": bool(r.get("WCYCLEASS")) if not is_admin else True,
-            "WSWAPONLY": bool(r.get("WSWAPONLY")) if not is_admin else True,
-            "WPAST": bool(r.get("WPAST")) if not is_admin else True,
-            "ADDEMPL": bool(r.get("ADDEMPL")) if not is_admin else True,
+            "WDUTIES": self._effective_write_perm(r, "WDUTIES", is_admin),
+            "WABSENCES": self._effective_write_perm(r, "WABSENCES", is_admin),
+            "WOVERTIMES": self._effective_write_perm(r, "WOVERTIMES", is_admin),
+            "WNOTES": self._effective_write_perm(r, "WNOTES", is_admin),
+            "WDEVIATION": self._effective_write_perm(r, "WDEVIATION", is_admin),
+            "WCYCLEASS": self._effective_write_perm(r, "WCYCLEASS", is_admin),
+            "WSWAPONLY": self._effective_write_perm(r, "WSWAPONLY", is_admin),
+            "WPAST": self._effective_write_perm(r, "WPAST", is_admin),
+            "ADDEMPL": self._effective_write_perm(r, "ADDEMPL", is_admin),
             "WACCEMWND": bool(r.get("WACCEMWND")) if not is_admin else True,
             "WACCGRWND": bool(r.get("WACCGRWND")) if not is_admin else True,
-            "BACKUP": bool(r.get("BACKUP")) if not is_admin else True,
+            "BACKUP": self._effective_write_perm(r, "BACKUP", is_admin),
             # SHOWABS ist dreiwertig (N 5, Spec 9.5.2 Nr. 2.1): 0=vollständig,
             # 1=anonymisiert, 2=gar nicht. ``SHOWABS`` = „darf Abwesenheiten
             # überhaupt sehen" (mode != 2), ``SHOWABS_MODE`` = der Rohwert.
@@ -1205,8 +1242,15 @@ class SP5Database:
             return None
         if r.get("ADMIN"):
             return dict.fromkeys(self._USER_PERMISSION_FIELDS, True)
+        # Nur-Lesemodus (RIGHTS 1/3) sperrt jedes Schreibrecht, auch bei gesetzten
+        # Altbestands-Flags; Anzeige-/Sichtbarkeitsflags (SHOW*) bleiben erhalten.
+        readonly = self._rights_is_readonly(r)
         perms = {
-            key: bool(r.get(field))
+            key: (
+                False
+                if readonly and field in self._WRITE_PERMISSION_FIELDS
+                else bool(r.get(field))
+            )
             for key, field in self._USER_PERMISSION_FIELDS.items()
         }
         # SHOWABS dreiwertig (Spec 9.5.2, D-67): „darf Abwesenheiten sehen"

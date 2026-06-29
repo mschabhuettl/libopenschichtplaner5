@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Benutzerrollen/-rechte aus echten 5USER-Daten korrekt aufgelöst.** `5USER.RIGHTS`
+  ist KEIN Boolean, sondern der Berechtigungs-**Modus** des Originals (`SP5Data.dll`
+  FUN_10043890/FUN_100435a0): `0` = volle Lese-/Schreibrechte (Planer), `1` =
+  Nur-Leserechte (Leser), `2` = differenzierte Rechte pro Gruppe/MA (mind. Planer),
+  `3` = wie 1 (read-only). `_role_from_record` prüfte invertiert `RIGHTS==1 → Planer`
+  und stufte dadurch echte Planer (RIGHTS 0/2) fälschlich als „Leser" ein. Jetzt:
+  `RIGHTS∈{1,3} → Leser`, sonst (0/2, nicht-Admin) → `Planer`, `ADMIN=1 → Admin`.
+- **Durchsetzung an den Modus gekoppelt (nicht nur Anzeige):** Im Nur-Lesemodus
+  (RIGHTS 1/3) liefern `_build_user_dict`/`get_user_permissions` jetzt **alle**
+  Schreibrechte als `False` — auch wenn die gespeicherten W*-Flags (Altbestand echter
+  DBs) noch gesetzt sind. Bisher hätte osp5 so einem read-only-Konto fälschlich
+  Schreibzugriff erlaubt. Anzeige-/Sichtbarkeitsflags (SHOW*) bleiben erhalten.
+- **Schreibkonvention konsistent:** `create_user`/`update_user` schreiben den Modus
+  jetzt passend (`Planer → RIGHTS=0`, `Leser → RIGHTS=1`); vorher wurde invertiert
+  `RIGHTS=1` für „Planer" geschrieben, im Widerspruch zur Original-Bedeutung.
+  Regressionstests in `tests/test_user_permissions.py`.
+
 ## [1.22.1] - 2026-06-29
 
 ### Fixed
