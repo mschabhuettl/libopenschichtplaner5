@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-06-29
+
 ### Added
 
 - `add_spshi_entry(noextra=…)` und `update_spshi_entry` (Schlüssel `NOEXTRA`) setzen
@@ -604,7 +606,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.22.0...HEAD
+[1.22.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.18.0...v1.19.0
