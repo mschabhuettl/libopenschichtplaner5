@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-06-29
+
 ### Added
 
 - `update_holiday_ban(ban_id, data)` ändert eine Urlaubssperre in `5HOBAN.DBF`
@@ -594,7 +596,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.20.0...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.21.0...HEAD
+[1.21.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.19.0...v1.20.0
 [1.19.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.17.0...v1.18.0
