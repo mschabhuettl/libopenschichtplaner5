@@ -3231,11 +3231,13 @@ class SP5Database:
                 "Delete it first or use the bulk/update endpoint."
             )
         # Get max existing ID
-        existing = read_dbf(filepath)
-        max_id = max((r.get("ID", 0) or 0 for r in existing), default=0)
-        new_id = max_id + 1
         record = {
-            "ID": new_id,
+            # ID wird in append_record(autoid_field="ID") atomar unter dem Append-
+            # Lock vergeben (P0-1) und in record zurückgeschrieben. Der frühere
+            # Vorab-Volltabellen-Read für max(ID)+1 war damit toter Aufwand und
+            # parste auf großen Tabellen die kompletten 5MASHI neu (~65 ms/Schreib-
+            # vorgang) — entfernt, beschleunigt das Eintragen/Umplanen (Punkt 6).
+            "ID": 0,
             "EMPLOYEEID": employee_id,
             "DATE": date_str,
             "SHIFTID": shift_id,
@@ -3368,11 +3370,10 @@ class SP5Database:
             raise ValueError(
                 f"Absence for employee {employee_id} on {date_str} already exists."
             )
-        existing = read_dbf(filepath)
-        max_id = max((r.get("ID", 0) or 0 for r in existing), default=0)
-        new_id = max_id + 1
         record = {
-            "ID": new_id,
+            # ID atomar in append_record(autoid_field="ID") vergeben (P0-1); der
+            # frühere max(ID)+1-Vorab-Read parste die ganze 5ABSEN neu — entfernt.
+            "ID": 0,
             "EMPLOYEEID": employee_id,
             "DATE": date_str,
             "LEAVETYPID": leave_type_id,

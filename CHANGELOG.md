@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dienstplan-Schreibvorgänge schneller: toten Vorab-Volltabellen-Read entfernt.**
+  `add_schedule_entry` und `add_absence` berechneten die neue ID noch als
+  `max(ID)+1` über einen vorgelagerten `read_dbf` der ganzen Tabelle. Seit der
+  atomaren ID-Vergabe (P0-1, `append_record(autoid_field="ID")` setzt die ID unter
+  dem Append-Lock und schreibt sie in `record` zurück) war dieser Vorab-Read toter
+  Aufwand — er parste auf großen Tabellen die komplette 5MASHI/5ABSEN neu. Entfernt;
+  die ID kommt weiterhin atomar aus `append_record`. Messung an 15 330 5MASHI-Sätzen:
+  `add_schedule_entry` **~187 → ~125 ms (~33 %)**. Beschleunigt das „Eintragen/
+  Umplanen" (Punkt 6). **Byte-paritätisch:** vergebene ID identisch (`max+1`),
+  bestehende Sätze unverändert (`test_concurrent_write_ids` grün, Revert→rot über die
+  atomare ID-Vergabe bestätigt); 328 Tests grün. *(Derselbe tote Vorab-Read besteht
+  noch in weiteren Schreibwegen — add_note, assign_cycle, set_leave_entitlement,
+  create_holiday_ban, create_booking, set_carry_forward — und wird separat bereinigt.)*
+
 ## [1.23.1] - 2026-06-29
 
 ### Changed
