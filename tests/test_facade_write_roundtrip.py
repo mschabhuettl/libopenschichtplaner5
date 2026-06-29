@@ -85,6 +85,11 @@ _SCHEMAS = {
         ("END", "D", 8), ("COLOR", "N", 11), ("DESCRIPT", "C", 200),
         ("RESERVED", "C", 20),
     ],
+    "5HOBAN": [
+        ("ID", "N", 11), ("GROUPID", "N", 11), ("START", "D", 8),
+        ("END", "D", 8), ("RESTRICT", "N", 11), ("DESCRIPT", "C", 200),
+        ("RESERVED", "C", 20),
+    ],
 }
 
 
@@ -223,6 +228,28 @@ def test_update_period_roundtrip(db):
 
 def test_update_period_unknown_id_returns_none(db):
     assert db.update_period(999999, {"description": "x"}) is None
+
+
+# ── 5HOBAN (Urlaubssperren, Bearbeiten) ─────────────────────────────────────
+
+
+def test_update_holiday_ban_roundtrip(db):
+    # P-VOLLERFASSUNG GruppenErfassen.11: Urlaubssperre bearbeiten (statt nur
+    # Anlegen+Löschen). update_holiday_ban ändert nur die übergebenen Felder.
+    rec = db.create_holiday_ban(2, "2026-07-01", "2026-07-31", reason="Sommersperre")
+    out = db.update_holiday_ban(rec["id"], {"end_date": "2026-08-15", "reason": "verlängert"})
+    assert out is not None
+    r = next(x for x in db._read("HOBAN") if x["ID"] == rec["id"])
+    assert str(r["END"]) == "2026-08-15"
+    assert r["DESCRIPT"] == "verlängert"
+    # Start/Gruppe/RESTRICT unverändert (nicht mitgegeben)
+    assert str(r["START"]) == "2026-07-01"
+    assert r["GROUPID"] == 2
+    assert r["RESTRICT"] == 1
+
+
+def test_update_holiday_ban_unknown_id_returns_none(db):
+    assert db.update_holiday_ban(999999, {"reason": "x"}) is None
 
 
 # ── 5LEAEN (Urlaubsanspruch, F-Format) ──────────────────────────────────────

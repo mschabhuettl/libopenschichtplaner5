@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `update_holiday_ban(ban_id, data)` ändert eine Urlaubssperre in `5HOBAN.DBF`
+  feldweise. Nur die übergebenen Schlüssel (`group_id`, `start_date`, `end_date`,
+  `reason`) werden geschrieben; nicht angegebene Felder bleiben unverändert. Gibt
+  den aktualisierten Satz als dict zurück bzw. `None`, wenn keine Sperre diese ID
+  hat. Damit lässt sich eine Urlaubssperre bearbeiten, statt sie löschen und neu
+  anlegen zu müssen.
+
 ## [1.20.0] - 2026-06-28
 
 ### Added

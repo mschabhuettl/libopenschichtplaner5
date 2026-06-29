@@ -4811,6 +4811,35 @@ class SP5Database:
             count += 1
         return count
 
+    def update_holiday_ban(self, ban_id: int, data: dict) -> dict | None:
+        """Update a holiday ban (5HOBAN) in place. Only provided keys change
+        (``group_id``, ``start_date``, ``end_date``, ``reason``). Returns the
+        updated record dict, or None if no ban has that ID."""
+        filepath = self._table("HOBAN")
+        fields = get_table_fields(filepath)
+        raw_idx, record = self._find_record("HOBAN", ban_id)
+        if raw_idx is None:
+            return None
+        update_data: dict = {}
+        if "group_id" in data:
+            update_data["GROUPID"] = data["group_id"]
+        if "start_date" in data:
+            update_data["START"] = data["start_date"]
+        if "end_date" in data:
+            update_data["END"] = data["end_date"]
+        if "reason" in data:
+            update_data["DESCRIPT"] = (data["reason"] or "")[:200]
+        if update_data:
+            update_record(filepath, fields, raw_idx, update_data)
+        return {
+            "id": ban_id,
+            "group_id": update_data.get("GROUPID", record.get("GROUPID")),
+            "start_date": update_data.get("START", record.get("START", "")),
+            "end_date": update_data.get("END", record.get("END", "")),
+            "restrict": record.get("RESTRICT", 1),
+            "reason": update_data.get("DESCRIPT", record.get("DESCRIPT", "")),
+        }
+
     # ── Annual Close ──────────────────────────────────────────
     def _annual_close_employee(
         self, emp: dict, year: int, keep_entitlements: bool = False
