@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Datenintegrität: nebenläufige Schreibvorgänge vergaben doppelte IDs** und konnten
+  dadurch unter Last Datensätze „vertauschen". Die ID neuer Sätze wurde als
+  `max(ID)+1` aus einem Lesevorgang berechnet, der NICHT unter demselben Lock lief
+  wie das anschließende Append. Bedient FastAPI mehrere synchrone Schreib-Requests
+  parallel aus seinem Threadpool, lasen mehrere denselben `max` und schrieben
+  dieselbe ID. Zwei Sätze mit gleicher ID ließen `find_all_records(ID=…)` mehrere
+  Treffer liefern, sodass ein anschließendes ID-adressiertes Update/Delete den
+  falschen (fremden) Satz traf. `append_record(…, autoid_field=…)` vergibt die ID
+  jetzt atomar INNERHALB des exklusiven Append-Locks (nur das ID-Feld wird gescannt,
+  also auch auf großen Tabellen günstig); alle ID-vergebenden Schreibwege der Fassade
+  sowie die `NUMBER`-Vergabe des Änderungsjournals nutzen das. Damit kann kein
+  Schreibvorgang mehr einen fremden Datensatz verändern (Round-Trip-/Byte-Paritäts-
+  und Nebenläufigkeits-Regressionstests in `tests/test_concurrent_write_ids.py`).
+
 ## [1.22.0] - 2026-06-29
 
 ### Added

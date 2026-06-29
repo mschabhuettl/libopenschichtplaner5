@@ -84,7 +84,6 @@ from .dbf_reader import (
     _dedupe_names,
     _parse_record,
     get_table_fields,
-    read_dbf,
 )
 
 logger = logging.getLogger(__name__)
@@ -370,26 +369,27 @@ def _append_journal(filepath: str, record: dict, change: int) -> None:
         )
         return
 
-    entries = read_dbf(jpath)
-    next_number = max((int(e.get("NUMBER", 0) or 0) for e in entries), default=0) + 1
-
     keys = _JOURNAL_KEYS.get(_table_stem(filepath).upper(), ("ID",))
     ids = [int(record.get(k) or 0) for k in keys]
     ids += [0] * (3 - len(ids))
 
     journal_record = {
-        "NUMBER": next_number,
+        "NUMBER": 0,  # allocated atomically under the -L lock (autoid_field below)
         "CHANGEID1": ids[0],
         "CHANGEID2": ids[1],
         "CHANGEID3": ids[2],
         "CHANGE": change,
     }
     # append_record on a -L file does not journal again (guard via _is_journal_file).
+    # NUMBER is allocated atomically inside append_record's exclusive lock so two
+    # concurrent journal writes cannot collide on the same NUMBER (same root as P0-1).
     # A corrupted or unwritable -L file is treated like a missing one (warn +
     # skip): the main write has already succeeded at this point, and raising
     # here would make the caller believe it failed.
     try:
-        append_record(jpath, get_table_fields(jpath), journal_record)
+        append_record(
+            jpath, get_table_fields(jpath), journal_record, autoid_field="NUMBER"
+        )
     except (OSError, ValueError) as exc:
         logger.warning(
             "DBF change journal %s not writable (%s) — entry skipped "
@@ -409,7 +409,47 @@ def _after_write(filepath: str, record: dict, change: int) -> None:
 # ─── public API ───────────────────────────────────────────────────────────────
 
 
-def append_record(filepath: str, fields: list[dict], record: dict) -> int:
+def _max_id_under_lock(
+    f, names: list[str], fields: list[dict], header_size: int,
+    record_size: int, num_records: int, id_field: str,
+) -> int:
+    """Highest value of *id_field* among the active records of the already-open,
+    already-locked file *f* (deleted records skipped, mirroring read_dbf).
+
+    Used for atomic ID allocation inside :func:`append_record`'s exclusive lock.
+    Only the id field's bytes are decoded (not the whole record), so the scan is
+    cheap even on large tables.
+    """
+    # Byte offset of the id field within a record (1 = leading delete-flag byte).
+    offset = 1
+    field_len = None
+    for field, fname in zip(fields, names, strict=True):
+        if fname == id_field:
+            field_len = int(field["len"])
+            break
+        offset += int(field["len"])
+    if field_len is None:
+        raise ValueError(f"autoid field {id_field!r} not present in fields list")
+
+    f.seek(header_size)
+    area = f.read(num_records * record_size)
+    max_id = 0
+    for i in range(num_records):
+        rec = area[i * record_size : (i + 1) * record_size]
+        if len(rec) < record_size or rec[0] == 0x2A:
+            continue  # truncated or deleted → not counted (matches read_dbf)
+        raw = rec[offset : offset + field_len].strip()
+        if raw:
+            try:
+                max_id = max(max_id, int(raw))
+            except ValueError:
+                pass  # non-numeric id field — ignore, defensive
+    return max_id
+
+
+def append_record(
+    filepath: str, fields: list[dict], record: dict, autoid_field: str | None = None
+) -> int:
     """
     Append *record* to the end of *filepath*.
 
@@ -421,34 +461,21 @@ def append_record(filepath: str, fields: list[dict], record: dict) -> int:
         Field descriptors as returned by :func:`get_table_fields`.
     record : dict
         Mapping of field-name → value.  Missing fields default to None.
+    autoid_field : str | None
+        If given, the record's ID is assigned atomically **inside** the exclusive
+        lock as ``max(existing) + 1`` and written back into *record* in place.
+        This closes the lost-update race where two concurrent callers computed the
+        same ``max(ID)+1`` outside any lock and wrote duplicate IDs — which made
+        ID-addressed updates/deletes hit the wrong record under load (P0-1).
+        Callers must read the assigned value back from ``record[autoid_field]``.
 
     Returns
     -------
     int
         New total record count after appending.
     """
-    # Build the raw record bytes (1 active-flag byte + field data).
-    # Field values are looked up by deduplicated name (5DADEM: START/START2),
-    # matching the read path.
-    row = bytearray(b"\x20")  # delete-flag: active
     names = _dedupe_names([str(f["name"]) for f in fields])
-    for field, fname in zip(fields, names, strict=True):
-        row += _encode_field(record.get(fname), field)
-
     num_records, header_size, record_size = _read_header_info(filepath)
-
-    # Record-Size-Mismatch: eine zu lange Zeile stillschweigend abzuschneiden
-    # würde Feldgrenzen verschieben und den Satz korrumpieren (falsche
-    # fields-Liste oder beschädigter Header) — ablehnen statt korrumpieren.
-    if len(row) > record_size:
-        raise ValueError(
-            f"Record size mismatch for {filepath}: encoded row is {len(row)} bytes, "
-            f"header says record_size={record_size} — fields list does not match the file"
-        )
-    # Shorter rows are padded (defensive for headers with trailing slack).
-    if len(row) < record_size:
-        row += b"\x20" * (record_size - len(row))
-    row_bytes: bytes = bytes(row)
 
     with _exclusive_open(filepath) as f:
         # Re-read the record count inside the lock to avoid TOCTOU race:
@@ -456,6 +483,33 @@ def append_record(filepath: str, fields: list[dict], record: dict) -> int:
         # acquires the lock, causing both to write new_count=N+1 instead of N+2.
         f.seek(4)
         num_records = struct.unpack("<I", f.read(4))[0]
+
+        # Atomic ID allocation under the SAME lock as the append (P0-1). Computing
+        # the next ID outside the lock let concurrent writers pick identical IDs.
+        if autoid_field is not None:
+            record[autoid_field] = _max_id_under_lock(
+                f, names, fields, header_size, record_size, num_records, autoid_field
+            ) + 1
+
+        # Build the raw record bytes (1 active-flag byte + field data); the id is
+        # now known. Field values are looked up by deduplicated name (5DADEM:
+        # START/START2), matching the read path.
+        row = bytearray(b"\x20")  # delete-flag: active
+        for field, fname in zip(fields, names, strict=True):
+            row += _encode_field(record.get(fname), field)
+
+        # Record-Size-Mismatch: eine zu lange Zeile stillschweigend abzuschneiden
+        # würde Feldgrenzen verschieben und den Satz korrumpieren (falsche
+        # fields-Liste oder beschädigter Header) — ablehnen statt korrumpieren.
+        if len(row) > record_size:
+            raise ValueError(
+                f"Record size mismatch for {filepath}: encoded row is {len(row)} bytes, "
+                f"header says record_size={record_size} — fields list does not match the file"
+            )
+        # Shorter rows are padded (defensive for headers with trailing slack).
+        if len(row) < record_size:
+            row += b"\x20" * (record_size - len(row))
+        row_bytes: bytes = bytes(row)
 
         # Find write position: just before the EOF marker (0x1A) if present
         f.seek(0, 2)  # seek to end

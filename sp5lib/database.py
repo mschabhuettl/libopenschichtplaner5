@@ -81,8 +81,10 @@ def _invalidate_cache_for_file(filepath: str) -> None:
 # dbf_writer-Funktionen mit zentraler Cache-Invalidierung umhüllt, damit
 # JEDER Schreibpfad in dieser Datei den globalen DBF-Cache aktualisiert
 # (Repro: Write + sofortiger Read im selben mtime-Tick lieferte alte Daten).
-def append_record(filepath: str, fields: list[dict], record: dict) -> int:
-    result = _dbf_append_record(filepath, fields, record)
+def append_record(
+    filepath: str, fields: list[dict], record: dict, autoid_field: str | None = None
+) -> int:
+    result = _dbf_append_record(filepath, fields, record, autoid_field=autoid_field)
     _invalidate_cache_for_file(filepath)
     return result
 
@@ -1016,13 +1018,13 @@ class SP5Database:
         for field in self._WRITE_PERMISSION_FIELDS:
             if field in data:
                 record[field] = 1 if data[field] else 0
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         # Store bcrypt hash in sidecar file
         if password:
             bcrypt_hash = self._hash_password_bcrypt(password)
-            self._save_bcrypt_hash(new_id, bcrypt_hash)
+            self._save_bcrypt_hash(record["ID"], bcrypt_hash)
         return {
-            "ID": new_id,
+            "ID": record["ID"],
             "NAME": record["NAME"],
             "DESCRIP": record["DESCRIP"],
             "ADMIN": bool(is_admin),
@@ -1467,9 +1469,9 @@ class SP5Database:
             "HIDE": False,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "ID": new_id,
+            "ID": record["ID"],
             "name": name,
             "weeks": size_weeks,
             "unit": 1,
@@ -1542,7 +1544,7 @@ class SP5Database:
                 "WORKPLACID": 0,
                 "RESERVED": "",
             }
-            append_record(filepath, fields, record)
+            append_record(filepath, fields, record, autoid_field="ID")
 
     def clear_cycle_entries(self, cycle_id: int) -> int:
         """Delete all 5CYENT entries for the given cycle. Returns count deleted."""
@@ -1607,9 +1609,9 @@ class SP5Database:
             "ENTRANCE": start_date,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "employee_id": employee_id,
             "cycle_id": cycle_id,
             "start": start_date,
@@ -2381,8 +2383,8 @@ class SP5Database:
             "NOEXTRA": 1 if noextra else 0,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
-        return {**record, "id": new_id}
+        append_record(filepath, fields, record, autoid_field="ID")
+        return {**record, "id": record["ID"]}
 
     def update_spshi_entry(self, entry_id: int, data: dict) -> dict:
         """Update fields of an existing 5SPSHI record."""
@@ -3197,7 +3199,7 @@ class SP5Database:
             "TYPE": schedule_type,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         self._invalidate_cache("MASHI")
         return record
 
@@ -3336,7 +3338,7 @@ class SP5Database:
             "END": end,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return record
 
     def update_absence(
@@ -3477,9 +3479,9 @@ class SP5Database:
             "TEXT2": text2 or "",
             "RESERVED": category or "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "employee_id": employee_id,
             "date": date,
             "text1": text,
@@ -3651,9 +3653,9 @@ class SP5Database:
         ):
             if key in field_names and key in data and data[key] is not None:
                 record[key] = data[key]
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         self._invalidate_cache("EMPL")
-        return {**record, "id": new_id}
+        return {**record, "id": record["ID"]}
 
     def update_employee(self, emp_id: int, data: dict) -> dict:
         """Update an existing employee record by ID."""
@@ -3777,9 +3779,9 @@ class SP5Database:
         for key in ("BOLD", "DAILYDEM", "ARBITR", "CFGLABEL", "CBKLABEL", "CBKSCHED"):
             if key in field_names and key in data and data[key] is not None:
                 record[key] = data[key]
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         self._invalidate_cache("GROUP")
-        return {**record, "id": new_id}
+        return {**record, "id": record["ID"]}
 
     def update_group(self, group_id: int, data: dict) -> dict:
         """Update an existing group record by ID."""
@@ -3846,7 +3848,7 @@ class SP5Database:
             "GROUPID": group_id,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return record
 
     def remove_group_member(self, group_id: int, employee_id: int) -> int:
@@ -3908,9 +3910,9 @@ class SP5Database:
         # R5.5-15: keine Arbeitszeitzuschläge berechnen
         if "NOEXTRA" in field_names and "NOEXTRA" in data and data["NOEXTRA"] is not None:
             record["NOEXTRA"] = 1 if data["NOEXTRA"] else 0
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         self._invalidate_cache("SHIFT")
-        return {**record, "id": new_id}
+        return {**record, "id": record["ID"]}
 
     def update_shift(self, shift_id: int, data: dict) -> dict:
         """Update an existing shift definition by ID."""
@@ -3996,8 +3998,8 @@ class SP5Database:
             "HIDE": 1 if data.get("HIDE") else 0,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
-        return {**record, "id": new_id}
+        append_record(filepath, fields, record, autoid_field="ID")
+        return {**record, "id": record["ID"]}
 
     def update_leave_type(self, lt_id: int, data: dict) -> dict:
         filepath = self._table("LEAVT")
@@ -4077,26 +4079,22 @@ class SP5Database:
             "INTERVAL": interval,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         repeated_ids: list[int] = []
         if repeat_years > 0:
             base = datetime.strptime(record["DATE"], "%Y-%m-%d").date()
-            next_id = new_id + 1
             for offset in range(1, repeat_years + 1):
                 year = base.year + offset
                 try:
                     d = base.replace(year=year)
                 except ValueError:  # 29.02. in Nicht-Schaltjahr
                     continue
-                append_record(
-                    filepath,
-                    fields,
-                    {**record, "ID": next_id, "DATE": d.isoformat()},
-                )
-                repeated_ids.append(next_id)
-                next_id += 1
+                # Each follow-up year gets its own atomically allocated ID.
+                child = {**record, "DATE": d.isoformat()}
+                append_record(filepath, fields, child, autoid_field="ID")
+                repeated_ids.append(child["ID"])
         self._invalidate_cache("HOLID")
-        result = {**record, "id": new_id}
+        result = {**record, "id": record["ID"]}
         if repeated_ids:
             result["repeated_ids"] = repeated_ids
         return result
@@ -4147,8 +4145,8 @@ class SP5Database:
             "HIDE": 1 if data.get("HIDE") else 0,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
-        return {**record, "id": new_id}
+        append_record(filepath, fields, record, autoid_field="ID")
+        return {**record, "id": record["ID"]}
 
     def update_workplace(self, wp_id: int, data: dict) -> dict:
         filepath = self._table("WOPL")
@@ -4322,8 +4320,8 @@ class SP5Database:
             "HIDE": 1 if data.get("HIDE") else 0,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
-        return {**record, "id": new_id}
+        append_record(filepath, fields, record, autoid_field="ID")
+        return {**record, "id": record["ID"]}
 
     def update_extracharge(self, xc_id: int, data: dict) -> dict:
         filepath = self._table("XCHAR")
@@ -4657,9 +4655,9 @@ class SP5Database:
             "INDAYS": 1 if in_days else 0,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "employee_id": employee_id,
             "year": year,
             "leave_type_id": leave_type_id,
@@ -4800,9 +4798,9 @@ class SP5Database:
             "DESCRIPT": reason[:200] if reason else "",
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "group_id": group_id,
             "start_date": start_date,
             "end_date": end_date,
@@ -5226,9 +5224,9 @@ class SP5Database:
             "NOTE": (note or "")[:200],
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "employee_id": employee_id,
             "date": date_str,
             "type": booking_type,
@@ -5361,12 +5359,12 @@ class SP5Database:
             "NOTE": f"{self._CARRY_FORWARD_NOTE} {year}",
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
             "employee_id": employee_id,
             "year": year,
             "hours": hours,
-            "booking_id": new_id,
+            "booking_id": record["ID"],
         }
 
     def calculate_annual_statement(self, employee_id: int, year: int) -> dict:
@@ -5880,7 +5878,7 @@ class SP5Database:
             "RESTRICT": grade,
             "RESERVED": (reason or "")[:20],
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {**record, "grade": grade, "exists": False}
 
     def remove_restriction(
@@ -6003,9 +6001,9 @@ class SP5Database:
             "DESCRIPT": (data.get("description", "") or "")[:200],
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "group_id": record["GROUPID"],
             "start": record["START"],
             "end": record["END"],
@@ -6096,9 +6094,9 @@ class SP5Database:
             "MAX": max_staff,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "group_id": group_id,
             "weekday": weekday,
             "shift_id": shift_id,
@@ -6225,8 +6223,8 @@ class SP5Database:
             "MAX": max_staff,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
-        return {**record, "id": new_id}
+        append_record(filepath, fields, record, autoid_field="ID")
+        return {**record, "id": record["ID"]}
 
     def update_special_staffing(self, record_id: int, data: dict) -> dict:
         """Update a date-specific staffing requirement."""
@@ -6570,9 +6568,9 @@ class SP5Database:
             "TYPE": exc_type,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "employee_id": employee_id,
             "cycle_assignment_id": cycle_assignment_id,
             "date": date_str,
@@ -6688,9 +6686,9 @@ class SP5Database:
             "RIGHTS": rights,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "user_id": user_id,
             "employee_id": employee_id,
             "rights": rights,
@@ -6746,9 +6744,9 @@ class SP5Database:
             "RIGHTS": rights,
             "RESERVED": "",
         }
-        append_record(filepath, fields, record)
+        append_record(filepath, fields, record, autoid_field="ID")
         return {
-            "id": new_id,
+            "id": record["ID"],
             "user_id": user_id,
             "group_id": group_id,
             "rights": rights,
