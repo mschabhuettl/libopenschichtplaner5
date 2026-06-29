@@ -2352,8 +2352,14 @@ class SP5Database:
         colortext: int = 0,
         colorbar: int = 0,
         colorbk: int = 16777215,
+        noextra: bool = False,
     ) -> dict:
-        """Append a new record to 5SPSHI.DBF. Returns the created record."""
+        """Append a new record to 5SPSHI.DBF. Returns the created record.
+
+        ``noextra`` setzt 5SPSHI.NOEXTRA (Spec 3.8.3 Nr. 13): „keine
+        Arbeitszeitzuschläge berechnen". Wirkt für freie Sonderdienste ohne
+        Schicht-Referenz; bei gesetzter SHIFTID gilt das NOEXTRA der Schicht.
+        """
         filepath = self._table("SPSHI")
         fields = get_table_fields(filepath)
         new_id = self._next_id("SPSHI")
@@ -2372,7 +2378,7 @@ class SP5Database:
             "BOLD": 0,
             "STARTEND": startend,
             "DURATION": duration,
-            "NOEXTRA": 0,
+            "NOEXTRA": 1 if noextra else 0,
             "RESERVED": "",
         }
         append_record(filepath, fields, record)
@@ -2397,8 +2403,11 @@ class SP5Database:
             "COLORBK",
             "STARTEND",
             "DURATION",
+            "NOEXTRA",
         )
         update_data = {k: v for k, v in data.items() if k in allowed}
+        if "NOEXTRA" in update_data:
+            update_data["NOEXTRA"] = 1 if update_data["NOEXTRA"] else 0
         update_record(filepath, fields, raw_idx, update_data)
         return {"id": entry_id, **update_data}
 
@@ -2459,6 +2468,7 @@ class SP5Database:
                     "color_text": bgr_to_hex(r.get("COLORTEXT", 0))
                     if r.get("COLORTEXT")
                     else "#000000",
+                    "noextra": bool(r.get("NOEXTRA")),
                 }
             )
         return result

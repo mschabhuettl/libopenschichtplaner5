@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `add_spshi_entry(noextra=…)` und `update_spshi_entry` (Schlüssel `NOEXTRA`) setzen
+  jetzt das 5SPSHI-Flag `NOEXTRA` („keine Arbeitszeitzuschläge berechnen", Spec 3.8.3
+  Nr. 13). Es wirkt für freie Sonderdienste ohne Schicht-Referenz; bei gesetzter
+  `SHIFTID` gilt weiterhin das `NOEXTRA` der Schicht. `get_spshi_entries_for_day`
+  liefert das Flag als `noextra` (bool) mit. Bisher war es beim Anlegen hart `0`.
+
 ## [1.21.0] - 2026-06-29
 
 ### Added

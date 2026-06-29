@@ -90,6 +90,14 @@ _SCHEMAS = {
         ("END", "D", 8), ("RESTRICT", "N", 11), ("DESCRIPT", "C", 200),
         ("RESERVED", "C", 20),
     ],
+    "5SPSHI": [
+        ("ID", "N", 11), ("EMPLOYEEID", "N", 11), ("DATE", "D", 8),
+        ("NAME", "C", 200), ("SHORTNAME", "C", 200), ("SHIFTID", "N", 11),
+        ("WORKPLACID", "N", 11), ("TYPE", "N", 5), ("COLORTEXT", "N", 11),
+        ("COLORBAR", "N", 11), ("COLORBK", "N", 11), ("BOLD", "N", 1),
+        ("STARTEND", "C", 36), ("DURATION", "F", 19), ("NOEXTRA", "N", 1),
+        ("RESERVED", "C", 20),
+    ],
 }
 
 
@@ -250,6 +258,30 @@ def test_update_holiday_ban_roundtrip(db):
 
 def test_update_holiday_ban_unknown_id_returns_none(db):
     assert db.update_holiday_ban(999999, {"reason": "x"}) is None
+
+
+# ── 5SPSHI (Sonderdienst NOEXTRA „keine Arbeitszeitzuschläge") ───────────────
+
+
+def test_spshi_noextra_create_and_update_roundtrip(db):
+    # P-VOLLERFASSUNG SonderdiensteEintragen.12: freier Sonderdienst mit dem Flag
+    # „keine Arbeitszeitzuschläge berechnen" (5SPSHI.NOEXTRA).
+    rec = db.add_spshi_entry(
+        employee_id=40, date_str="2026-07-15", name="Messe", startend="0800-1600",
+        noextra=True,
+    )
+    r = next(x for x in db._read("SPSHI") if x["ID"] == rec["id"])
+    assert r["NOEXTRA"] == 1
+    # Update kann das Flag wieder abschalten.
+    db.update_spshi_entry(rec["id"], {"NOEXTRA": 0})
+    r2 = next(x for x in db._read("SPSHI") if x["ID"] == rec["id"])
+    assert r2["NOEXTRA"] == 0
+
+
+def test_spshi_noextra_default_zero(db):
+    rec = db.add_spshi_entry(employee_id=40, date_str="2026-07-16", name="Normal")
+    r = next(x for x in db._read("SPSHI") if x["ID"] == rec["id"])
+    assert r["NOEXTRA"] == 0
 
 
 # ── 5LEAEN (Urlaubsanspruch, F-Format) ──────────────────────────────────────
