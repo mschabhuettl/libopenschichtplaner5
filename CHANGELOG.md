@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Zeitzuschläge (5XCHAR) wirkten nur am Montag, wenn sie über die App angelegt
+  wurden.** Die Wochentagsmaske `VALIDDAYS` wird im Original leer-getrennt
+  gespeichert (`"1 1 1 1 1 1 1"`) und von `parse_day_mask` per `split()` zerlegt.
+  Schrieb ein Client die Maske kompakt (`"1111111"`), sah `split()` nur ein einziges
+  Token — nur der erste Wochentag (Montag) galt als aktiv, alle anderen Tage wurden
+  beim Zuschlag ignoriert (an einem 08–16-Uhr-Dienst gemessen: 10 statt 98 Stunden).
+  `parse_day_mask` akzeptiert jetzt zusätzlich die Kompaktform (ein Token → je Zeichen
+  ein Flag), sodass bereits kompakt gespeicherte Bestände sofort korrekt rechnen.
+
+### Added
+
+- `normalize_day_mask(mask, slots)` rendert eine Wochentagsmaske in der kanonischen
+  leer-getrennten Originalform. `create_extracharge`/`update_extracharge` normalisieren
+  `VALIDDAYS` damit beim Schreiben (Byte-Parität mit dem Originallayout).
+
 ## [1.23.2] - 2026-06-29
 
 ### Changed
