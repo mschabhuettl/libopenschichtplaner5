@@ -53,16 +53,32 @@ def to_date(value: Any) -> date | None:
 
 
 def parse_day_mask(mask: str, slots: int) -> tuple[bool, ...]:
-    """Parse a space-separated flag mask (D-35/D-36), e.g. ``"1 1 1 1 1 0 0 0"``.
+    """Parse a weekday flag mask (D-35/D-36).
+
+    The original stores flags **space-separated**, e.g. ``"1 1 1 1 1 0 0 0"``.
+    A compact form without separators (e.g. ``"1111111"``) is also accepted so
+    masks written by older clients still parse correctly — otherwise ``split()``
+    would see a single token and only the first weekday would ever be active.
 
     ``slots`` is 8 for WORKDAYS/5LEAVT.VALIDDAYS (Mon..Sun + Ft) and 7 for
     5XCHAR.VALIDDAYS (Mon..Sun without the Ft slot). Missing slots are False.
     """
     tokens = (mask or "").split()
+    if len(tokens) <= 1:
+        # Compact form ("1111111") — treat each character as one flag.
+        tokens = list(tokens[0]) if tokens else []
     return tuple(
         bool(tokens[i]) and tokens[i] != "0" if i < len(tokens) else False
         for i in range(slots)
     )
+
+
+def normalize_day_mask(mask: str, slots: int) -> str:
+    """Render a weekday mask in the canonical space-separated form the original
+    uses (e.g. ``"1 1 1 1 1 1 1"``), accepting compact or spaced input. Used on
+    write so stored masks keep byte-parity with the original layout."""
+    flags = parse_day_mask(mask, slots)
+    return " ".join("1" if f else "0" for f in flags)
 
 
 def _parse_minutes(token: str) -> int | None:

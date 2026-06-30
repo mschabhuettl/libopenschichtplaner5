@@ -722,6 +722,48 @@ def test_extracharge_hours_by_day_splits_at_midnight(tmp_path):
         db.extracharge_hours_by_day(date_from="2014-12-31", date_to="2014-12-01")
 
 
+def test_extracharge_validdays_compact_format_counts_all_days(tmp_path):
+    """P2-5 (Punkt 32): „Zeitzuschläge hinzufügen ohne Wirkung". Das Frontend schrieb
+    VALIDDAYS kompakt (``"1111111"``); ``parse_day_mask`` sah darin nur EIN Token →
+    nur Montag aktiv → ein Tages-Zuschlag auf einen Dienstag wurde nicht gezählt.
+    Jetzt: kompakte Maske wird auf Schreiben kanonisch (leer-getrennt) normalisiert UND
+    der Parser toleriert kompakte Altbestände. Beweis: ein Dienstags-Dienst wird gezählt."""
+    day_shift = {"ID": 5, "NAME": "Tagdienst", "SHORTNAME": "T", "POSITION": 5,
+                 "HIDE": 0, "NOEXTRA": 0}
+    for i in range(7):
+        day_shift[f"STARTEND{i}"] = "08:00-16:00"
+        day_shift[f"DURATION{i}"] = 8.0
+    db = make_db(tmp_path, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [day_shift],
+        "5XCHAR": [],
+        # Dienstag, 02.12.2014
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 5, "DATE": "2014-12-02"}],
+    })
+
+    # (a) Neuanlage mit kompakter Maske → kanonisch gespeichert, alle Tage aktiv.
+    rec = db.create_extracharge({"NAME": "Tagstunden", "START": 480, "END": 960,
+                                 "VALIDITY": 0, "VALIDDAYS": "1111111", "HOLRULE": 0})
+    assert rec["VALIDDAYS"] == "1 1 1 1 1 1 1"  # Byte-Parität mit Originalformat
+    total = {r["charge_name"]: r["hours"] for r in db.calculate_extracharge_hours(2014, 12)}
+    assert total.get("Tagstunden", 0.0) == pytest.approx(8.0)  # Dienstag gezählt
+
+    # (b) Altbestand mit kompakter Maske (wie vom alten Frontend geschrieben) wird
+    #     vom Parser ebenfalls korrekt über alle Tage gerechnet.
+    sub = tmp_path / "b"
+    sub.mkdir()
+    db2 = make_db(sub, {
+        "5EMPL": [EMP_WEEK],
+        "5SHIFT": [day_shift],
+        "5XCHAR": [{"ID": 9, "NAME": "Altstunden", "POSITION": 1, "START": 480,
+                    "END": 960, "VALIDITY": 0, "VALIDDAYS": "1111111", "HOLRULE": 0,
+                    "HIDE": 0}],
+        "5MASHI": [{"ID": 1, "EMPLOYEEID": 1, "SHIFTID": 5, "DATE": "2014-12-02"}],
+    })
+    total2 = {r["charge_name"]: r["hours"] for r in db2.calculate_extracharge_hours(2014, 12)}
+    assert total2.get("Altstunden", 0.0) == pytest.approx(8.0)
+
+
 def test_spshi_without_shiftid_uses_own_window(tmp_path):
     """Befund 8 Nr. 7: 5SPSHI ohne SHIFTID zählt mit eigenem STARTEND-Fenster."""
     db = make_db(tmp_path, {

@@ -577,6 +577,27 @@ def test_empty_workdays_mask():
     ) == 0.0
 
 
+def test_parse_day_mask_compact_and_spaced_equivalent():
+    """P2-5: Eine kompakte Maske (``"1111111"``, vom Frontend geschrieben) muss
+    dieselben Wochentage liefern wie die original-getrennte (``"1 1 1 1 1 1 1"``).
+    Vorher sah ``split()`` nur EIN Token → nur Montag aktiv → Zuschlag „ohne Wirkung"."""
+    assert calc.parse_day_mask("1111111", 7) == (True,) * 7
+    assert calc.parse_day_mask("1 1 1 1 1 1 1", 7) == (True,) * 7
+    # gemischte Beispiele bleiben deckungsgleich
+    assert calc.parse_day_mask("0000010", 7) == calc.parse_day_mask("0 0 0 0 0 1 0", 7)
+    assert calc.parse_day_mask("1100000", 7) == (True, True, False, False, False, False, False)
+    # 8-Slot-Fall (WORKDAYS/LEAVT) ebenfalls
+    assert calc.parse_day_mask("11111000", 8) == (True, True, True, True, True, False, False, False)
+
+
+def test_normalize_day_mask_canonical_spaced():
+    """normalize_day_mask rendert immer die kanonische, leer-getrennte Originalform."""
+    assert calc.normalize_day_mask("1111111", 7) == "1 1 1 1 1 1 1"
+    assert calc.normalize_day_mask("1 1 1 1 1 1 1", 7) == "1 1 1 1 1 1 1"  # idempotent
+    assert calc.normalize_day_mask("0000010", 7) == "0 0 0 0 0 1 0"
+    assert calc.normalize_day_mask("", 7) == "0 0 0 0 0 0 0"
+
+
 def test_absence_interval3_across_midnight():
     # 22:00-06:00 über Mitternacht (D-30: END <= START = Tageswechsel) → 8 h
     rec = {"DATE": "2024-03-04", "LEAVETYPID": 1, "INTERVAL": 3, "START": 1320, "END": 360}

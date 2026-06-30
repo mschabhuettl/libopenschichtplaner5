@@ -4360,7 +4360,8 @@ class SP5Database:
             "START": data.get("START", 0),
             "END": data.get("END", 0),
             "VALIDITY": data.get("VALIDITY", 0),
-            "VALIDDAYS": data.get("VALIDDAYS", "0000000"),
+            # Canonical space-separated mask (original layout); accepts compact input.
+            "VALIDDAYS": calc.normalize_day_mask(data.get("VALIDDAYS", ""), 7),
             "HOLRULE": data.get("HOLRULE", 0),
             "HIDE": 1 if data.get("HIDE") else 0,
             "RESERVED": "",
@@ -4387,6 +4388,9 @@ class SP5Database:
         ):
             if key in data:
                 update_data[key] = data[key]
+        # Normalize the weekday mask to the canonical space-separated layout.
+        if "VALIDDAYS" in update_data:
+            update_data["VALIDDAYS"] = calc.normalize_day_mask(update_data["VALIDDAYS"], 7)
         update_record(filepath, fields, raw_idx, update_data)
         return {"id": xc_id, **update_data}
 
