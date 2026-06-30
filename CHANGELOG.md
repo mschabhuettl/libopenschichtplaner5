@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-06-30
+
 ### Fixed
 
 - **Zeitzuschläge (5XCHAR) wirkten nur am Montag, wenn sie über die App angelegt
@@ -699,7 +701,8 @@ continues to import it unchanged as `sp5lib`.
 - Requires Python 3.10 or newer.
 - Licensed under the MIT License.
 
-[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.23.2...HEAD
+[Unreleased]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.23.2...v1.24.0
 [1.23.2]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.23.1...v1.23.2
 [1.23.1]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.23.0...v1.23.1
 [1.23.0]: https://github.com/mschabhuettl/libopenschichtplaner5/compare/v1.22.1...v1.23.0
