@@ -5630,7 +5630,10 @@ class SP5Database:
           - shift_and_absence: employee has both a MASHI/SPSHI entry AND an ABSEN entry on the same day
           - holiday_ban: employee has an ABSEN entry on a day within a HOBAN period for their group(s)
           - holiday_shift: employee has a shift on a public holiday (severity: warning)
-          - long_shift: employee has a shift lasting more than 10 hours (severity: warning)
+
+        (No „long_shift" check: a rigid hours threshold is wrong — long shifts such as
+        12-hour rosters are normal in many settings and not a conflict; the original
+        has no such check either.)
 
         Konflikte werden ausschließlich auf der **Ist-Ebene** ermittelt: Sollplan-
         Einträge (5MASHI.TYPE=1, Spec 4.12/D-58) sind geplante Zielvorgaben und werden
@@ -5657,24 +5660,21 @@ class SP5Database:
         else:
             member_ids = set(emp_map.keys())
 
-        # Build lookup maps for shift names, durations, and absence types
+        # Build lookup maps for shift names and absence types
         shift_name_map: dict = {}  # {shift_id: shift_name}
-        shift_dur_map: dict = {}  # {shift_id: duration_hours (float)}
         for r in self._read("SHIFT"):
             sid = r.get("ID")
             if sid:
                 shift_name_map[sid] = r.get("NAME", r.get("SHORTNAME", str(sid)))
-                shift_dur_map[sid] = float(r.get("DURATION0", 0) or 0)
         leave_name_map: dict = {}  # {leave_type_id: leave_type_name}
         for r in self._read("LEAVT"):
             lid = r.get("ID")
             if lid:
                 leave_name_map[lid] = r.get("NAME", r.get("SHORTNAME", str(lid)))
 
-        # Build: employee_id -> set of dates with shifts, date -> shift name, date -> duration
+        # Build: employee_id -> set of dates with shifts, date -> shift name
         shift_dates: dict = {}
         shift_detail: dict = {}  # {(eid, date): shift_name}
-        shift_duration: dict = {}  # {(eid, date): duration_hours}
         for r in self._read("MASHI"):
             # Konflikte werden NUR auf der Ist-Ebene berechnet: ein Sollplan-Ziel
             # (5MASHI.TYPE=1, Spec 4.12/D-58) ist eine geplante Vorgabe, kein
@@ -5692,10 +5692,6 @@ class SP5Database:
                     sname = shift_name_map.get(sid, "") if sid else ""
                     if (eid, d) not in shift_detail:
                         shift_detail[(eid, d)] = sname
-                    if (eid, d) not in shift_duration:
-                        shift_duration[(eid, d)] = (
-                            shift_dur_map.get(sid, 0.0) if sid else 0.0
-                        )
         for r in self._read("SPSHI"):
             d = r.get("DATE", "")
             if d and d.startswith(prefix):
@@ -5704,8 +5700,6 @@ class SP5Database:
                     shift_dates.setdefault(eid, set()).add(d)
                     if (eid, d) not in shift_detail:
                         shift_detail[(eid, d)] = r.get("NAME", "Sonderschicht")
-                    if (eid, d) not in shift_duration:
-                        shift_duration[(eid, d)] = float(r.get("DURATION", 0) or 0)
 
         # Expandierte 5CYASS-Zyklusdienste (Spec 6.3/4.2): zyklusgeplante
         # Mitarbeiter erzeugen dieselben Konflikte; 5MASHI-Tage gewinnen
@@ -5723,10 +5717,6 @@ class SP5Database:
                 sid = r.get("SHIFTID")
                 if (eid, d) not in shift_detail:
                     shift_detail[(eid, d)] = shift_name_map.get(sid, "") if sid else ""
-                if (eid, d) not in shift_duration:
-                    shift_duration[(eid, d)] = (
-                        shift_dur_map.get(sid, 0.0) if sid else 0.0
-                    )
 
         # Build: employee_id -> list of absence date strings, and date -> leave type name
         absence_dates: dict = {}
@@ -5842,35 +5832,12 @@ class SP5Database:
                         }
                     )
 
-        # Conflict type 4: long_shift — shift duration > 10 hours
-        LONG_SHIFT_THRESHOLD_H = 10.0
-        for eid in member_ids:
-            emp = emp_map.get(eid)
-            emp_name = (
-                f"{emp.get('NAME', '')}, {emp.get('FIRSTNAME', '')}".strip(", ")
-                if emp
-                else f"MA#{eid}"
-            )
-            for date_str in sorted(shift_dates.get(eid, set())):
-                dur = shift_duration.get((eid, date_str), 0.0)
-                if dur > LONG_SHIFT_THRESHOLD_H:
-                    day_display = (
-                        date_str[8:10] + "." + date_str[5:7] + "." + date_str[0:4]
-                    )
-                    sname = shift_detail.get((eid, date_str), "")
-                    shift_info = f" ({sname})" if sname else ""
-                    conflicts.append(
-                        {
-                            "employee_id": eid,
-                            "employee_name": emp_name,
-                            "date": date_str,
-                            "type": "long_shift",
-                            "severity": "warning",
-                            "shift_name": sname,
-                            "duration_hours": dur,
-                            "message": f"{emp_name}: Schicht{shift_info} dauert {dur:.1f}h am {day_display} (>10h)",
-                        }
-                    )
+        # (Früher: Konflikttyp „long_shift" bei Schichtdauer > 10 h. Entfernt — ein
+        #  starrer Stunden-Schwellwert ist falsch: lange Dienste, z. B. 12-Stunden-
+        #  Schichten, sind in vielen Betrieben völlig normal und kein Konflikt. Das
+        #  Original kennt ohnehin keine solche Prüfung. Eine Schichtdauer ist allein
+        #  kein Konflikt; eine Dienstdefinition mit fragwürdiger Dauer ist in der
+        #  Schichtart-Verwaltung sichtbar, nicht als Plan-Konflikt.)
 
         # Sort by date then employee_id
         conflicts.sort(key=lambda c: (c["date"], c["employee_id"]))

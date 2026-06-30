@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Lange Dienste sind kein Konflikt mehr.** `get_schedule_conflicts` meldete jeden
+  Dienst mit einer Dauer über 10 Stunden als `long_shift`-Warnung. Ein starrer
+  Stunden-Schwellwert ist falsch — 12-Stunden-Schichten sind in vielen Betrieben
+  völlig normal und kein Konflikt; das Original kennt ohnehin keine solche Prüfung.
+  Der `long_shift`-Konflikttyp (und die ausschließlich dafür berechnete Schichtdauer-
+  Aufschlüsselung) entfällt. Die übrigen Konflikte (Dienst+Abwesenheit am selben Tag,
+  Urlaubssperre, Dienst am Feiertag) bleiben unverändert.
+
 ## [1.24.0] - 2026-06-30
 
 ### Fixed
