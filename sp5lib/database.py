@@ -379,7 +379,16 @@ class SP5Database:
             # Convert color fields to hex
             self._color_fields(r)
             result.append(r)
-        result.sort(key=lambda x: x.get("POSITION", 0))
+        # Original-Default „Ansicht > Sortierung > Name": alphabetisch nach
+        # Nachname, dann Vorname (Wine-Orakel; POSITION entspricht dem dortigen
+        # Modus „Vorgabe" und bleibt als Feld erhalten).
+        result.sort(
+            key=lambda x: (
+                (x.get("NAME") or "").lower(),
+                (x.get("FIRSTNAME") or "").lower(),
+                x.get("POSITION") or 0,
+            )
+        )
         return result
 
     def get_employee(self, emp_id: int) -> dict | None:

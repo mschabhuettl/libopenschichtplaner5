@@ -237,7 +237,13 @@ class SP5PostgresDatabase:
 
     def get_employees(self, include_hidden: bool = False) -> list[dict]:
         with self._session() as s:
-            stmt = select(Employee).order_by(Employee.position)
+            # Original-Default "Sortierung > Name" - identisch zum DBF-Pfad
+            # (SP5Database.get_employees), sonst bricht die Aequivalenz.
+            stmt = select(Employee).order_by(
+                func.lower(func.coalesce(Employee.name, "")),
+                func.lower(func.coalesce(Employee.firstname, "")),
+                Employee.position,
+            )
             if not include_hidden:
                 stmt = stmt.where(Employee.hide == False)
             rows = s.scalars(stmt).all()

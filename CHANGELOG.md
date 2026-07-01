@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Mitarbeiterlisten sind alphabetisch sortiert (wie das Original).** `get_employees`
+  lieferte die Mitarbeiter in der manuellen Reihenfolge (`POSITION`). Das Original
+  zeigt sie standardmäßig nach **Ansicht > Sortierung > Name** — alphabetisch nach
+  Nachname, dann Vorname; die manuelle Reihenfolge entspricht dort dem Modus
+  „Vorgabe". `get_employees` (DBF und PostgreSQL-Spiegel) sortiert jetzt nach
+  Nachname/Vorname; `POSITION` bleibt als Feld erhalten.
+
 ## [1.24.1] - 2026-06-30
 
 ### Changed

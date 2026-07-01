@@ -285,7 +285,9 @@ def test_personnel_table_equivalent(both):
     # Ein-Jahres-Zeitraum inkl. Doppelwert genommen/verbleibend (5LEAEN)
     pg_year = pg.get_personnel_table("2014-01-01", "2014-12-31")
     assert pg_year == dbf.get_personnel_table("2014-01-01", "2014-12-31")
-    acct = pg_year["rows"][0]["leave_accounts"][1]
+    # MA 1 (Muster) explizit adressieren - die Zeilen sind namenssortiert
+    row_muster = next(r for r in pg_year["rows"] if r["employee_id"] == 1)
+    acct = row_muster["leave_accounts"][1]
     assert acct["taken"] == pytest.approx(1.5)
     assert acct["remaining"] == pytest.approx(30 + 5 - 1.5)
     with pytest.raises(ValueError):
