@@ -1345,11 +1345,11 @@ class SP5Database:
         return None
 
     def login_diagnostics(self, name: str) -> dict:
-        """Privacy-safe diagnostics for a *failed* login — never touches/returns
-        the password or the raw digest. Lets an operator explain a real-DB login
-        edge case from the server logs. Returns: user_found, hidden, digest_len,
-        digest_is_md5_shape, digest_all_zero, digest_is_empty_md5, has_bcrypt,
-        encodings_tried.
+        """Datenschutz-sichere Diagnose eines *fehlgeschlagenen* Logins — fasst
+        weder Passwort noch Roh-Digest an. Erlaubt dem Betreiber, einen
+        Echt-DB-Login-Grenzfall aus den Server-Logs zu erklären. Liefert:
+        user_found, hidden, digest_len, digest_is_md5_shape, digest_all_zero,
+        digest_is_empty_md5, has_bcrypt, encodings_tried.
 
         Reading the signature: a 16-byte non-zero MD5 that no encoding matched
         (digest_is_md5_shape=true, digest_all_zero=false, has_bcrypt=false) means
@@ -1416,7 +1416,7 @@ class SP5Database:
 
     # ── Shift Cycles (rich) ───────────────────────────────────
     def get_shift_cycles(self) -> list[dict]:
-        """Return all shift cycles with their weekly schedule from CYCLE + CYENT."""
+        """Liefert alle Zyklen mit ihrem Wochenplan aus CYCLE + CYENT."""
         cycles = self._read("CYCLE")
         entries = self._read("CYENT")
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
@@ -1429,8 +1429,8 @@ class SP5Database:
             size = cycle.get("SIZE", 1)  # number of weeks
             unit = cycle.get("UNIT", 1)  # 1 = weeks
 
-            # Build flat day array for all weeks
-            # INDEX in CYENT is the flat day offset (0 = Mon week1, 7 = Mon week2, ...)
+            # Flaches Tages-Array über alle Wochen bauen
+            # INDEX in CYENT ist der flache Tages-Offset (0 = Mo Woche1, 7 = Mo Woche2, …)
             cyc_entries = {e["INDEX"]: e for e in entries if e.get("CYCLEEID") == cid}
 
             weeks = []
@@ -1500,7 +1500,7 @@ class SP5Database:
         return result
 
     def get_shift_cycle(self, cycle_id: int) -> dict | None:
-        """Return a single cycle by ID with full schedule."""
+        """Liefert einen einzelnen Zyklus per ID mit vollem Plan."""
         for c in self.get_shift_cycles():
             if c["ID"] == cycle_id:
                 return c
@@ -1509,7 +1509,7 @@ class SP5Database:
     # ── Shift Cycle CRUD ──────────────────────────────────────
 
     def create_shift_cycle(self, name: str, size_weeks: int) -> dict:
-        """Create a new shift cycle in 5CYCLE.DBF. Returns the new cycle dict."""
+        """Legt einen neuen Zyklus in 5CYCLE.DBF an. Liefert das neue Zyklus-dict."""
         filepath = self._table("CYCLE")
         fields = get_table_fields(filepath)
         new_id = self._next_id("CYCLE")
@@ -1536,7 +1536,7 @@ class SP5Database:
         }
 
     def update_shift_cycle(self, cycle_id: int, name: str, size_weeks: int) -> dict:
-        """Update name and/or size of an existing shift cycle."""
+        """Aktualisiert Name und/oder Größe eines bestehenden Zyklus."""
         filepath = self._table("CYCLE")
         fields = get_table_fields(filepath)
         raw_idx, existing = self._find_record("CYCLE", cycle_id)
@@ -1546,7 +1546,7 @@ class SP5Database:
         return {"ID": cycle_id, "name": name, "weeks": size_weeks}
 
     def delete_shift_cycle(self, cycle_id: int) -> int:
-        """Delete a shift cycle from 5CYCLE and all its entries from 5CYENT and 5CYASS."""
+        """Löscht einen Zyklus aus 5CYCLE samt seinen Einträgen aus 5CYENT und 5CYASS."""
         # Delete cycle entries first
         self.clear_cycle_entries(cycle_id)
         # Cascade: remove employee assignments that reference this cycle
@@ -1776,7 +1776,7 @@ class SP5Database:
                         existing_entries.add((eid, d))
 
         # Build restrictions lookup: (employee_id, shift_id, weekday) -> True.
-        # WEEKDAY is the original day index (D-34): 0=Mon..6=Sun, 7=holiday.
+        # WEEKDAY ist der Original-Tag-Index (D-34): 0=Mo..6=So, 7=Feiertag.
         restrictions: set = set()  # (employee_id, shift_id, weekday)
         restr_holidays = calc.holiday_calendar(self._read("HOLID"))
         if respect_restrictions:
@@ -1839,7 +1839,7 @@ class SP5Database:
         skipped_hours_limit = 0
         errors: list = []
         preview: list = []
-        # Per-employee stats for optimization report
+        # Je-MA-Statistik für den Optimierungsbericht
         emp_stats: dict = {}  # emp_id -> {'total': 0, 'weekend': 0, 'night': 0}
 
         # Build employee data lookup
@@ -1899,7 +1899,7 @@ class SP5Database:
             shift_names = {}
 
         def _get_shift_duration_hours(shift_id: int, weekday_index: int) -> float:
-            """Get shift duration in hours for a specific weekday.
+            """Schichtdauer in Stunden für einen bestimmten Wochentag.
 
             Tagindex nach Orakel-Daten (Spec 3.4.3 / Parity-Befund 2):
             DURATION0=Montag … DURATION6=Sonntag, DURATION7=Feiertag.
@@ -1908,37 +1908,38 @@ class SP5Database:
             return durations.get(weekday_index, 0.0)
 
         def _get_iso_week_key(d: _date) -> tuple:
-            """Return (year, week_number) for ISO week grouping."""
+            """Liefert (year, week_number) für die ISO-Wochen-Gruppierung."""
             iso = d.isocalendar()
             return (iso[0], iso[1])
 
         def _check_availability(emp_id: int, target_date: _date, shift_id: int) -> bool:
-            """Check if employee is available on the given date for the given shift.
+            """Prüft, ob der MA am Datum für die Schicht verfügbar ist.
 
-            Returns True if available (or no availability data), False if unavailable.
+            Liefert True bei Verfügbarkeit (oder ohne Verfügbarkeitsdaten),
+            False bei Nichtverfügbarkeit.
             """
             if emp_id not in availability_data:
-                return True  # No availability data → assume available
+                return True  # Keine Verfügbarkeitsdaten → als verfügbar annehmen
 
             weekday_idx = target_date.weekday()  # 0=Mon, 6=Sun
             day_avail = availability_data[emp_id].get(weekday_idx)
             if day_avail is None:
-                return True  # No data for this day → assume available
+                return True  # Keine Daten für diesen Tag → als verfügbar annehmen
 
             if not day_avail.get("available", True):
-                return False  # Explicitly unavailable
+                return False  # Explizit nicht verfügbar
 
-            # If available with time windows, check shift time against windows
+            # Verfügbar mit Zeitfenstern: Schichtzeit gegen die Fenster prüfen
             time_windows = day_avail.get("time_windows", [])
             if not time_windows:
-                return True  # Available all day
+                return True  # Ganztägig verfügbar
 
-            # Parse shift time range for this weekday
+            # Schicht-Zeitbereich für diesen Wochentag parsen
             shift = shift_durations.get(shift_id)
             if shift is None:
-                return True  # Can't determine shift time → assume OK
+                return True  # Schichtzeit nicht bestimmbar → als OK annehmen
 
-            # Get shift STARTEND for this weekday from raw shift data
+            # Schicht-STARTEND für diesen Wochentag aus den Rohdaten holen
             try:
                 shift_rec = None
                 for s in self._read("SHIFT"):
@@ -2034,17 +2035,17 @@ class SP5Database:
 
                 delta = (target_date - start_date).days
                 if delta < 0:
-                    # Day is before cycle start → skip
+                    # Tag liegt vor dem Zyklusstart → überspringen
                     continue
 
                 position = delta % cycle_length
                 shift_id = entries_for_cycle.get(position)
                 if not shift_id:
-                    # No shift defined for this position (Frei / day off) → skip
+                    # Keine Schicht an dieser Position (Frei) → überspringen
                     continue
 
-                # Check restrictions: WEEKDAY is the day index 0=Mon..6=Sun,
-                # 7=holiday (D-34); calc.day_index maps the date accordingly.
+                # Einschränkungen prüfen: WEEKDAY ist der Tag-Index 0=Mo..6=So,
+                # 7=Feiertag (D-34); calc.day_index bildet das Datum entsprechend ab.
                 if respect_restrictions and restrictions:
                     day_idx = calc.day_index(target_date, restr_holidays)
                     restricted = (emp_id, shift_id, day_idx) in restrictions
