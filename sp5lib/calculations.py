@@ -1,22 +1,24 @@
-"""Central calculation layer for Schichtplaner5 (original spec, chapter 3).
+"""Zentrale Berechnungsschicht für Schichtplaner5 (Original-Spec, Kapitel 3).
 
-Pure functions over plain dict records exactly as :func:`sp5lib.dbf_reader.read_dbf`
-delivers them — no I/O and no SP5Database dependency. The per-employee calculation
-parameters (5EMPL) travel as a lightweight :class:`EmployeeContext`; the holiday
-calendar (5HOLID) as a plain ``date -> INTERVAL`` mapping built by
-:func:`holiday_calendar`. All record collections passed to the functions are
-expected to be pre-filtered to a single employee (5MASHI/5SPSHI/5ABSEN/5BOOK/
-5OVER/5LEAEN of that employee); shift definitions are passed as ``shifts_by_id``.
+Reine Funktionen über einfache dict-Datensätze, exakt wie
+:func:`sp5lib.dbf_reader.read_dbf` sie liefert — kein I/O, keine
+SP5Database-Abhängigkeit. Die MA-Berechnungsparameter (5EMPL) reisen als
+leichtgewichtiger :class:`EmployeeContext`; der Feiertagskalender (5HOLID) als
+einfaches ``date -> INTERVAL``-Mapping aus :func:`holiday_calendar`. Alle an
+die Funktionen übergebenen Datensatz-Sammlungen sind auf EINEN Mitarbeiter
+vorgefiltert (5MASHI/5SPSHI/5ABSEN/5BOOK/5OVER/5LEAEN dieses MA);
+Schichtdefinitionen kommen als ``shifts_by_id``.
 
-Conventions (spec 3.1):
+Konventionen (Spec 3.1):
 
-- weekday index ``0 = Monday .. 6 = Sunday``; day index ``7`` is the holiday
-  ("Ft") slot used by ``WORKDAYS``/``STARTEND``/``DURATION``/demand tables.
-- times of day are minutes since midnight (full day 1440, half-day boundary 720).
-- hour values are floats (minutes / 60); float zero comparisons use ``EPSILON``.
-- every employee-related period sum clamps ``[von, bis]`` to the employment
-  period ``EMPSTART``/``EMPEND`` (unset bounds stay open); 5BOOK account
-  bookings are summed BEFORE clamping and act solely via their ``DATE``.
+- Wochentag-Index ``0 = Montag .. 6 = Sonntag``; Tag-Index ``7`` ist der
+  Feiertags-Slot („Ft") für ``WORKDAYS``/``STARTEND``/``DURATION``/Bedarfstabellen.
+- Uhrzeiten sind Minuten seit Mitternacht (ganzer Tag 1440, Halbtagsgrenze 720).
+- Stundenwerte sind Floats (Minuten / 60); Float-Null-Vergleiche nutzen ``EPSILON``.
+- jede MA-bezogene Zeitraumsumme klemmt ``[von, bis]`` auf den
+  Beschäftigungszeitraum ``EMPSTART``/``EMPEND`` (ungesetzte Grenzen bleiben
+  offen); 5BOOK-Kontobuchungen werden VOR dem Klemmen summiert und wirken
+  allein über ihr ``DATE``.
 """
 
 from collections.abc import Iterable, Iterator, Mapping
@@ -25,8 +27,8 @@ from datetime import date, timedelta
 from typing import Any
 
 Record = dict[str, Any]
-# 5HOLID calendar: DATE -> INTERVAL (0 = full-day holiday, 1 = first half
-# 0..720 min, 2 = second half 720..1440 min).
+# 5HOLID-Kalender: DATE -> INTERVAL (0 = ganztägiger Feiertag, 1 = erste
+# Hälfte 0..720 min, 2 = zweite Hälfte 720..1440 min).
 Holidays = Mapping[date, int]
 
 EPSILON = 1e-6  # float zero comparisons (spec 3.1 no. 7)
@@ -65,7 +67,7 @@ def parse_day_mask(mask: str, slots: int) -> tuple[bool, ...]:
     """
     tokens = (mask or "").split()
     if len(tokens) <= 1:
-        # Compact form ("1111111") — treat each character as one flag.
+        # Kompaktform ("1111111") — jedes Zeichen als ein Flag behandeln.
         tokens = list(tokens[0]) if tokens else []
     return tuple(
         bool(tokens[i]) and tokens[i] != "0" if i < len(tokens) else False
@@ -74,15 +76,16 @@ def parse_day_mask(mask: str, slots: int) -> tuple[bool, ...]:
 
 
 def normalize_day_mask(mask: str, slots: int) -> str:
-    """Render a weekday mask in the canonical space-separated form the original
-    uses (e.g. ``"1 1 1 1 1 1 1"``), accepting compact or spaced input. Used on
-    write so stored masks keep byte-parity with the original layout."""
+    """Gibt eine Wochentagsmaske in der kanonischen leerzeichengetrennten Form
+    des Originals aus (z. B. ``"1 1 1 1 1 1 1"``); akzeptiert kompakte wie
+    getrennte Eingabe. Beim Schreiben genutzt, damit gespeicherte Masken
+    byte-paritätisch zum Original-Layout bleiben."""
     flags = parse_day_mask(mask, slots)
     return " ".join("1" if f else "0" for f in flags)
 
 
 def _parse_minutes(token: str) -> int | None:
-    """Parse ``"HH:MM"`` to minutes since midnight (D-28/D-29)."""
+    """Parst ``"HH:MM"`` zu Minuten seit Mitternacht (D-28/D-29)."""
     hours, sep, minutes = token.partition(":")
     if not sep:
         return None
@@ -112,7 +115,7 @@ def parse_startend(value: str) -> list[tuple[int, int]]:
 
 
 def holiday_calendar(holid_records: Iterable[Record]) -> dict[date, int]:
-    """Build the ``date -> INTERVAL`` holiday mapping from 5HOLID records."""
+    """Baut das ``date -> INTERVAL``-Feiertags-Mapping aus 5HOLID-Sätzen."""
     calendar: dict[date, int] = {}
     for rec in holid_records:
         d = to_date(rec.get("DATE"))
@@ -122,14 +125,14 @@ def holiday_calendar(holid_records: Iterable[Record]) -> dict[date, int]:
 
 
 def day_index(d: date, holidays: Holidays) -> int:
-    """Day index for STARTEND/DURATION/demand lookups: 7 on holidays (3.4.3 no. 5)."""
+    """Tag-Index für STARTEND/DURATION/Bedarfs-Lookups: 7 an Feiertagen (3.4.3 Nr. 5)."""
     return HOLIDAY_INDEX if d in holidays else d.weekday()
 
 
 def _dated_entries(
     entries: Iterable[Record], von: date, bis: date
 ) -> Iterator[tuple[date, Record]]:
-    """Yield (date, record) for records whose DATE lies in [von, bis]."""
+    """Liefert (date, record) für Sätze, deren DATE in [von, bis] liegt."""
     for rec in entries:
         d = to_date(rec.get("DATE"))
         if d is not None and von <= d <= bis:
@@ -149,7 +152,7 @@ class EmployeeContext:
     hrs_week: float = 0.0
     hrs_month: float = 0.0
     hrs_total: float = 0.0
-    deduct_hol: bool = False  # DEDUCTHOL, only effective for calcbase 1/2
+    deduct_hol: bool = False  # DEDUCTHOL, wirkt nur bei calcbase 1/2
     emp_start: date | None = None  # EMPSTART; None = open (serial 0/1 unset)
     emp_end: date | None = None  # EMPEND; None = open
 
@@ -171,9 +174,9 @@ class EmployeeContext:
 def clamp_to_employment(
     emp: EmployeeContext, von: date, bis: date
 ) -> tuple[date, date]:
-    """Clamp an evaluation period to the employment period (spec 3.1 no. 8).
+    """Klemmt einen Auswertungszeitraum auf den Beschäftigungszeitraum (Spec 3.1 Nr. 8).
 
-    Unset bounds do not clamp; the result may be empty (von > bis).
+    Ungesetzte Grenzen klemmen nicht; das Ergebnis kann leer sein (von > bis).
     """
     if emp.emp_start is not None:
         von = max(von, emp.emp_start)
@@ -183,7 +186,7 @@ def clamp_to_employment(
 
 
 def is_employed(emp: EmployeeContext, d: date) -> bool:
-    """EMPSTART <= d <= EMPEND with unset bounds open."""
+    """EMPSTART <= d <= EMPEND, ungesetzte Grenzen offen."""
     if emp.emp_start is not None and d < emp.emp_start:
         return False
     if emp.emp_end is not None and d > emp.emp_end:
@@ -255,7 +258,7 @@ def is_eligible_replacement(
     return True, None
 
 
-# ── 3.2 Working days and holidays ───────────────────────────────
+# ── 3.2 Arbeitstage und Feiertage ───────────────────────────────
 
 
 def count_holidays_on_workdays(
@@ -295,7 +298,7 @@ def count_working_days(
 
 
 def is_working_day(emp: EmployeeContext, d: date, holidays: Holidays) -> bool:
-    """Spec 3.2.2 no. 9: half holidays do NOT make the single day free."""
+    """Spec 3.2.2 Nr. 9: halbe Feiertage machen den einzelnen Tag NICHT frei."""
     if not is_employed(emp, d):
         return False
     if not emp.workdays[d.weekday()]:
@@ -313,10 +316,10 @@ def is_working_day(emp: EmployeeContext, d: date, holidays: Holidays) -> bool:
 def booking_sum(
     bookings: Iterable[Record], account: int, von: date, bis: date
 ) -> float:
-    """Sum 5BOOK values of one account (TYPE) with DATE in [von, bis].
+    """Summiert 5BOOK-Werte eines Kontos (TYPE) mit DATE in [von, bis].
 
-    Spec 3.6.1 no. 2: bookings act solely via their DATE — no employment
-    clamping (the callers sum them before clamping).
+    Spec 3.6.1 Nr. 2: Buchungen wirken allein über ihr DATE — kein
+    Beschäftigungs-Klemmen (die Aufrufer summieren vor dem Klemmen).
     """
     total = 0.0
     for _d, rec in _dated_entries(bookings, von, bis):
@@ -343,7 +346,7 @@ def _nominal_week(
     if wd_b < 6:  # tail rest week from Monday
         rest += count_working_days(emp, bis - timedelta(days=wd_b), bis, holidays)
         bis = bis - timedelta(days=wd_b + 1)  # previous Sunday
-    if emp.deduct_hol and von <= bis:  # only the full-weeks region
+    if emp.deduct_hol and von <= bis:  # nur der Ganze-Wochen-Bereich
         rest -= count_holidays_on_workdays(emp, von, bis, holidays)
     full_weeks = max(0, (bis - von).days + 1) // 7
     return rest * emp.hrs_day + full_weeks * emp.hrs_week
@@ -365,12 +368,12 @@ def _nominal_month(
     rest = 0.0
     if von.day != 1:
         rest += count_working_days(emp, von, _last_of_month(von), holidays)
-        von = _last_of_month(von) + timedelta(days=1)  # 1st of next month
+        von = _last_of_month(von) + timedelta(days=1)  # 1. des Folgemonats
     if bis != _last_of_month(bis):
         rest += count_working_days(emp, date(bis.year, bis.month, 1), bis, holidays)
-        bis = date(bis.year, bis.month, 1) - timedelta(days=1)  # end of prev. month
+        bis = date(bis.year, bis.month, 1) - timedelta(days=1)  # Ende des Vormonats
     full_months = 12 * (bis.year - von.year) + bis.month - von.month + 1
-    if emp.deduct_hol and von <= bis:  # only the full-months region
+    if emp.deduct_hol and von <= bis:  # nur der Ganze-Monate-Bereich
         rest -= count_holidays_on_workdays(emp, von, bis, holidays)
     return rest * emp.hrs_day + max(0, full_months) * emp.hrs_month
 
@@ -418,10 +421,10 @@ def get_nominal_hours(
 
 
 def shift_hours_on_day(shift: Record, d: date, holidays: Holidays) -> float:
-    """Spec 3.4.3 no. 5/6: DURATION[idx] with idx = holiday ? 7 : weekday.
+    """Spec 3.4.3 Nr. 5/6: DURATION[idx] mit idx = Feiertag ? 7 : Wochentag.
 
-    The duration only counts if work times are defined for that day index
-    (STARTEND{idx} has a window with non-zero minutes); otherwise 0.
+    Die Dauer zählt nur, wenn für diesen Tag-Index Arbeitszeiten definiert
+    sind (STARTEND{idx} hat ein Fenster mit Minuten ≠ 0); sonst 0.
     """
     idx = day_index(d, holidays)
     windows = parse_startend(str(shift.get(f"STARTEND{idx}") or ""))
@@ -431,10 +434,11 @@ def shift_hours_on_day(shift: Record, d: date, holidays: Holidays) -> float:
 
 
 def _replaced_days(special: list[tuple[date, Record]]) -> set[date]:
-    """Days whose normal duty is replaced by a work-time deviation.
+    """Tage, deren Normaldienst durch eine Arbeitszeitabweichung ersetzt ist.
 
-    Spec 3.4.4 no. 12: a 5SPSHI record with SHIFTID set is a work-time
-    deviation and replaces the normal duty of that day (no double counting).
+    Spec 3.4.4 Nr. 12: ein 5SPSHI-Satz mit gesetzter SHIFTID ist eine
+    Arbeitszeitabweichung und ersetzt den Normaldienst des Tages (keine
+    Doppelzählung).
     """
     return {d for d, rec in special if int(rec.get("SHIFTID") or 0)}
 
@@ -483,10 +487,10 @@ def duty_day_counts(
     cycle_shifts: Iterable[Record] = (),
     special_shifts: Iterable[Record] = (),
 ) -> list[int]:
-    """Spec 3.4.5 no. 14/15: per day index, days with at least one duty.
+    """Spec 3.4.5 Nr. 14/15: je Tag-Index die Tage mit mindestens einem Dienst.
 
-    Returns ``cnt[0..7]``; a duty on a Sunday that is also a holiday increments
-    both ``cnt[6]`` and ``cnt[7]``.
+    Liefert ``cnt[0..7]``; ein Dienst an einem Sonntag, der zugleich Feiertag
+    ist, erhöht ``cnt[6]`` UND ``cnt[7]``.
     """
     von, bis = clamp_to_employment(emp, von, bis)
     counts = [0] * 8
@@ -549,7 +553,7 @@ def get_actual_hours(
     return ist + sums.charged - sums.charged_deduct_actual
 
 
-# ── 3.5 Absences: hour value and charging ───────────────────────
+# ── 3.5 Abwesenheiten: Stundenwert und Anrechnung ───────────────
 
 
 def absence_hours(
@@ -569,12 +573,12 @@ def absence_hours(
                 if not emp.workdays[HOLIDAY_INDEX]:
                     return 0.0
             elif not emp.workdays[HOLIDAY_INDEX]:
-                # Half holiday on a free Ft: clip the absence to the
-                # non-holiday half (holiday half: 1 -> 0..720, 2 -> 720..1440).
+                # Halber Feiertag an freiem Ft: die Abwesenheit auf die
+                # Nicht-Feiertagshälfte kappen (Feiertagshälfte: 1 -> 0..720, 2 -> 720..1440).
                 free = (
                     (HALF_DAY_MINUTES, DAY_MINUTES) if hol == 1 else (0, HALF_DAY_MINUTES)
                 )
-                if interval == 0:  # full-day absence -> the free half
+                if interval == 0:  # ganztägige Abwesenheit -> die freie Hälfte
                     return emp.hrs_day * 0.5
                 if interval in (1, 2):
                     half = (
@@ -613,11 +617,11 @@ def charge_factor(leave_type: Record, hrs_day: float) -> float:
 
 @dataclass(frozen=True)
 class AbsenceSums:
-    """Spec 3.5.4 no. 5: the three hour sums over a period."""
+    """Spec 3.5.4 Nr. 5: die drei Stundensummen über einen Zeitraum."""
 
-    charged: float  # sum 1: charged hours of types WITHOUT DEDUCTACT (paid)
-    charged_deduct_actual: float  # sum 2: charged hours of DEDUCTACT types
-    raw_deduct_overtime: float  # sum 3: raw hours of DEDUCTOVT types
+    charged: float  # Summe 1: angerechnete Stunden der Arten OHNE DEDUCTACT (bezahlt)
+    charged_deduct_actual: float  # Summe 2: angerechnete Stunden der DEDUCTACT-Arten
+    raw_deduct_overtime: float  # Summe 3: Rohstunden der DEDUCTOVT-Arten
 
 
 def absence_sums(
@@ -629,7 +633,7 @@ def absence_sums(
     absences: Iterable[Record],
     leave_types_by_id: Mapping[int, Record],
 ) -> AbsenceSums:
-    """Period sums of absence charging, clamped to employment (3.5.4)."""
+    """Zeitraumsummen der Abwesenheits-Anrechnung, beschäftigungsgeklemmt (3.5.4)."""
     von, bis = clamp_to_employment(emp, von, bis)
     charged = deduct_actual = raw_overtime = 0.0
     if von <= bis:
@@ -692,10 +696,10 @@ def get_saldo(
     leave_types_by_id: Mapping[int, Record] | None = None,
     bookings: Iterable[Record] = (),
 ) -> float:
-    """Spec 3.6.2 no. 4: saldo = actual − nominal over the same period.
+    """Spec 3.6.2 Nr. 4: Saldo = Ist − Soll über denselben Zeitraum.
 
-    There is no persisted account balance and no year-end close for hour
-    accounts (3.6.2 no. 5/6) — corrections are 5BOOK bookings only.
+    Es gibt keinen persistierten Kontostand und keinen Jahresabschluss für
+    Stundenkonten (3.6.2 Nr. 5/6) — Korrekturen sind ausschließlich 5BOOK-Buchungen.
     """
     ist = get_actual_hours(
         emp,
@@ -781,7 +785,7 @@ def leave_taken(
 
 @dataclass(frozen=True)
 class LeaveAccount:
-    """Spec 3.7.1 no. 5: the five values of one entitlement statistics row."""
+    """Spec 3.7.1 Nr. 5: die fünf Werte einer Anspruchs-Statistikzeile."""
 
     entitlement: float  # ENTITLEMNT ("Normal")
     rest: float  # REST (carry-over from previous year)
@@ -808,7 +812,7 @@ def leave_account(
     entitlements: Iterable[Record],
     absences: Iterable[Record],
 ) -> LeaveAccount:
-    """Spec 3.7.1: entitlement account for (employee × year × leave type)."""
+    """Spec 3.7.1: Anspruchskonto für (Mitarbeiter × Jahr × Abwesenheitsart)."""
     rec = _entitlements_by_year_type(entitlements).get(
         (year, int(leave_type.get("ID") or 0))
     )
@@ -838,12 +842,12 @@ def annual_close(
     absences: Iterable[Record],
     keep_entitlements: bool = False,
 ) -> list[Record]:
-    """Spec 3.7.2 no. 7: year-end close — compute the 5LEAEN rows for year+1.
+    """Spec 3.7.2 Nr. 7: Jahresabschluss — die 5LEAEN-Zeilen für Jahr+1 berechnen.
 
-    Pure computation: returns the new/updated rows as plain dicts (YEAR,
-    LEAVETYPID, ENTITLEMNT, REST, INDAYS); persisting them is the caller's job.
-    ``keep_entitlements`` is the dialog option "Urlaubsansprüche bleiben im
-    Folgejahr gleich".
+    Reine Berechnung: liefert die neuen/aktualisierten Zeilen als dicts (YEAR,
+    LEAVETYPID, ENTITLEMNT, REST, INDAYS); das Persistieren ist Sache des
+    Aufrufers. ``keep_entitlements`` ist die Dialog-Option „Urlaubsansprüche
+    bleiben im Folgejahr gleich".
     """
     by_year_type = _entitlements_by_year_type(entitlements)
     result = []
@@ -898,10 +902,10 @@ def forfeit_rest(
     entitlements: Iterable[Record],
     absences: Iterable[Record],
 ) -> list[Record]:
-    """Spec 3.7.3 no. 8: cut REST to the consumption up to the cutoff date.
+    """Spec 3.7.3 Nr. 8: REST auf den Verbrauch bis zum Stichtag kappen.
 
-    Returns the rows to update (YEAR, LEAVETYPID, REST); REST is only ever
-    reduced, never increased, and ENTITLEMNT stays untouched.
+    Liefert die zu aktualisierenden Zeilen (YEAR, LEAVETYPID, REST); REST wird
+    nur je verringert, nie erhöht, ENTITLEMNT bleibt unangetastet.
     """
     year = cutoff.year
     by_year_type = _entitlements_by_year_type(entitlements)
@@ -962,19 +966,20 @@ def daily_work_intervals(
     cycle_shifts: Iterable[Record] = (),
     special_shifts: Iterable[Record] = (),
 ) -> dict[date, list[tuple[int, int]]]:
-    """Work-side intervals per calendar day for the charge intersection.
+    """Arbeitsseitige Intervalle je Kalendertag für den Anrechnungs-Schnitt.
 
-    Uses the shift time windows STARTEND{idx} (idx = holiday ? 7 : weekday, up
-    to 3 sub-windows, spec 3.8.3 no. 10), splits day-crossing windows onto the
-    calendar days d and d+1 (3.4.3 no. 8), honours NOEXTRA (3.8.3 no. 13; for
-    5SPSHI via the referenced shift if SHIFTID is set, else the own field) and
-    the work-time-deviation replacement rule (3.4.4 no. 12).
+    Nutzt die Schicht-Zeitfenster STARTEND{idx} (idx = Feiertag ? 7 :
+    Wochentag, bis zu 3 Teilfenster, Spec 3.8.3 Nr. 10), teilt tags-
+    übergreifende Fenster auf die Kalendertage d und d+1 (3.4.3 Nr. 8),
+    beachtet NOEXTRA (3.8.3 Nr. 13; bei 5SPSHI über die referenzierte Schicht,
+    wenn SHIFTID gesetzt, sonst das eigene Feld) und die Ersetzungsregel für
+    Arbeitszeitabweichungen (3.4.4 Nr. 12).
     """
     von, bis = clamp_to_employment(emp, von, bis)
     intervals: dict[date, list[tuple[int, int]]] = {}
     if von > bis:
         return intervals
-    scan_from = von - timedelta(days=1)  # overflow from the previous day
+    scan_from = von - timedelta(days=1)  # Überlauf vom Vortag
     special = list(_dated_entries(special_shifts, scan_from, bis))
     replaced = _replaced_days(special)
 
@@ -1074,7 +1079,7 @@ def get_extracharge_hours(
     special_shifts: Iterable[Record] = (),
     half_as_full: bool = False,
 ) -> float:
-    """Charge-eligible hours of one charge type over [von, bis] (3.8)."""
+    """Zuschlagsfähige Stunden einer Zuschlagsart über [von, bis] (3.8)."""
     von, bis = clamp_to_employment(emp, von, bis)
     if von > bis:
         return 0.0
@@ -1096,7 +1101,7 @@ def get_extracharge_hours(
     return total
 
 
-# ── 3.9 Personnel table and utilization ─────────────────────────
+# ── 3.9 Personaltabelle und Auslastung ──────────────────────────
 
 
 def shift_assignment_counts(
@@ -1107,7 +1112,7 @@ def shift_assignment_counts(
     manual_shifts: Iterable[Record] = (),
     cycle_shifts: Iterable[Record] = (),
 ) -> dict[int, int]:
-    """Spec 3.9.3 no. 4: per shift type, number of assignments in the period."""
+    """Spec 3.9.3 Nr. 4: je Schichtart die Zahl der Zuweisungen im Zeitraum."""
     von, bis = clamp_to_employment(emp, von, bis)
     counts: dict[int, int] = {}
     if von > bis:
@@ -1126,7 +1131,7 @@ def count_special_shifts(
     bis: date,
     special_shifts: Iterable[Record] = (),
 ) -> int:
-    """Spec 3.9.2 no. 2: number of special duties in the period."""
+    """Spec 3.9.2 Nr. 2: Zahl der Sonderdienste im Zeitraum."""
     von, bis = clamp_to_employment(emp, von, bis)
     if von > bis:
         return 0
@@ -1147,7 +1152,7 @@ def personnel_table_row(
     leave_types_by_id: Mapping[int, Record] | None = None,
     bookings: Iterable[Record] = (),
 ) -> dict[str, float]:
-    """Spec 3.9.2 no. 2: the standard personnel-table columns for one employee."""
+    """Spec 3.9.2 Nr. 2: die Standard-Personaltabellen-Spalten eines Mitarbeiters."""
     leave_types_by_id = leave_types_by_id or {}
     plan = dict(
         holidays=holidays,
@@ -1200,10 +1205,10 @@ def count_assigned(
     d: date,
     shift_ids: Iterable[int],
 ) -> int:
-    """Spec 3.9.4 no. 8: employees assigned to the shift type(s) on day d.
+    """Spec 3.9.4 Nr. 8: die der/den Schichtart(en) an Tag d zugewiesenen MA.
 
-    ``entries_by_employee`` maps an employee key to its plan entries (5MASHI +
-    expanded 5CYASS + 5SPSHI with SHIFTID); each employee counts at most once.
+    ``entries_by_employee`` bildet einen MA-Schlüssel auf seine Planeinträge ab
+    (5MASHI + expandierte 5CYASS + 5SPSHI mit SHIFTID); jeder MA zählt höchstens einmal.
     """
     wanted = set(shift_ids)
     count = 0
@@ -1234,10 +1239,10 @@ def demand_for_day(
     holidays: Holidays,
     shift_id: int | None = None,
 ) -> tuple[int, int] | None:
-    """Look up (MIN, MAX) demand from 5SHDEM-style records for day d.
+    """Schlägt den (MIN, MAX)-Bedarf aus 5SHDEM-artigen Sätzen für Tag d nach.
 
-    Records carry WEEKDAY as day index 0..7 (7 = holiday slot); the caller
-    pre-filters by group. Returns None if no demand is defined.
+    Die Sätze tragen WEEKDAY als Tag-Index 0..7 (7 = Feiertags-Slot); der
+    Aufrufer filtert nach Gruppe vor. Liefert None, wenn kein Bedarf definiert ist.
     """
     idx = day_index(d, holidays)
     for rec in demands:
