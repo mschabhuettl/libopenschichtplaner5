@@ -191,7 +191,7 @@ def _encode_field(value: Any, field: dict) -> bytes:
         return _encode_string(str(value) if value else "", flen)
 
     elif ftype == "D":
-        # Expects 'YYYY-MM-DD' or 'YYYYMMDD'; pads with spaces if empty
+        # Erwartet 'YYYY-MM-DD' oder 'YYYYMMDD'; leere Werte mit Leerzeichen aufgefüllt
         s = str(value).strip() if value else ""
         if len(s) == 10 and s[4] == "-":
             s = s.replace("-", "")  # YYYY-MM-DD → YYYYMMDD
@@ -513,7 +513,7 @@ def append_record(
                 f"Record size mismatch for {filepath}: encoded row is {len(row)} bytes, "
                 f"header says record_size={record_size} — fields list does not match the file"
             )
-        # Shorter rows are padded (defensive for headers with trailing slack).
+        # Kürzere Zeilen werden aufgefüllt (defensiv für Header mit Rest-Slack).
         if len(row) < record_size:
             row += b"\x20" * (record_size - len(row))
         row_bytes: bytes = bytes(row)
