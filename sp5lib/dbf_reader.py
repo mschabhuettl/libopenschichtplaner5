@@ -1,6 +1,6 @@
 """
-Pure Python DBF/dBASE reader for Schichtplaner5 databases.
-Handles UTF-16 LE string encoding used by the Delphi/FoxPro application.
+Reiner Python-Reader für die DBF/dBASE-Dateien von Schichtplaner5.
+Behandelt die UTF-16-LE-Textkodierung der Delphi/FoxPro-Anwendung.
 """
 
 import io
@@ -8,26 +8,26 @@ import struct
 from datetime import date
 from typing import Any
 
-#: Binary C fields (Spec D-21): the content is raw bytes, not text. These are
-#: returned (and written) as unstripped ``bytes`` of the full field width.
-#: Name-based matching is exact for the fixed 30-table SP5 schema — verified
-#: against the reference DB headers: DIGEST exists only in 5USER, CREATIME and
-#: UUID only in 5BUILD. (RESERVED fields are deliberately not included here:
-#: existing callers consume them as strings.)
+#: Binäre C-Felder (Spec D-21): der Inhalt sind rohe Bytes, kein Text. Sie
+#: werden als ungestrippte ``bytes`` in voller Feldbreite gelesen (und
+#: geschrieben). Der Namensabgleich ist für das feste 30-Tabellen-Schema
+#: exakt — gegen die Referenz-DB-Header geprüft: DIGEST gibt es nur in 5USER,
+#: CREATIME und UUID nur in 5BUILD. (RESERVED-Felder bleiben bewusst außen
+#: vor: bestehende Aufrufer konsumieren sie als Strings.)
 BINARY_C_FIELDS = {"DIGEST", "CREATIME", "UUID"}
 
 
 def _dedupe_names(names: list[str]) -> list[str]:
-    """Disambiguate duplicate field names position-based.
+    """Doppelte Feldnamen positionsbasiert eindeutig machen.
 
-    The physical 5DADEM header carries *two* fields named ``START`` (original
-    schema bug, Spec D-55; the original binds fields ordinally, D-12, so the
-    duplicate is harmless there). Because records are exposed as dicts, the
-    second (and any further) occurrence of a name gets a numeric suffix:
-    5DADEM's period end date is exposed as ``START2``. The write path
-    (``dbf_writer``) applies the same convention, so ``START``/``START2``
-    round-trip. No SP5 table contains a literal field name that collides with
-    a generated suffix name.
+    Der physische 5DADEM-Header führt *zwei* Felder namens ``START``
+    (Original-Schemafehler, Spec D-55; das Original bindet Felder ordinal,
+    D-12, dort ist das Duplikat harmlos). Da Datensätze als dicts exponiert
+    werden, bekommt das zweite (und jedes weitere) Vorkommen eines Namens ein
+    Zahlensuffix: das Zeitraum-Ende von 5DADEM heißt ``START2``. Der
+    Schreibpfad (``dbf_writer``) nutzt dieselbe Konvention, sodass
+    ``START``/``START2`` round-trippen. Keine SP5-Tabelle enthält einen
+    Feldnamen, der mit einem generierten Suffixnamen kollidiert.
     """
     seen: dict[str, int] = {}
     result = []
@@ -39,43 +39,44 @@ def _dedupe_names(names: list[str]) -> list[str]:
 
 def _is_utf16_le(raw: bytes) -> bool:
     """
-    Heuristic: detect if raw bytes are UTF-16 LE encoded text.
+    Heuristik: erkennt, ob rohe Bytes UTF-16-LE-kodierter Text sind.
 
-    In UTF-16 LE Latin-1 text, bytes at odd positions (1, 3, 5, ...) are 0x00;
-    for non-Latin scripts up to Arabic (Greek 0x03xx, Cyrillic 0x04xx, Hebrew
-    0x05xx, Arabic 0x06xx) they are 0x01..0x07. Plain ASCII data fields
-    (WORKDAYS, STARTEND*, ...) contain only printable bytes >= 0x20 at odd
-    positions, so any odd byte < 0x08 marks UTF-16 LE text. Known limitation:
-    text consisting ONLY of characters >= U+0800 (e.g. pure CJK) is still
-    misdetected as ASCII.
+    In UTF-16-LE-Latin-1-Text sind die Bytes an ungeraden Positionen
+    (1, 3, 5, …) 0x00; für nicht-lateinische Schriften bis Arabisch
+    (Griechisch 0x03xx, Kyrillisch 0x04xx, Hebräisch 0x05xx, Arabisch 0x06xx)
+    sind sie 0x01..0x07. Reine ASCII-Datenfelder (WORKDAYS, STARTEND*, …)
+    enthalten an ungeraden Positionen nur druckbare Bytes >= 0x20 — jedes
+    ungerade Byte < 0x08 markiert also UTF-16-LE-Text. Bekannte Grenze: Text,
+    der NUR aus Zeichen >= U+0800 besteht (z. B. reines CJK), wird weiterhin
+    fälschlich als ASCII erkannt.
     """
     if len(raw) < 4:
-        # Very short field — check if the second byte is a UTF-16 high byte
+        # Sehr kurzes Feld — prüfen, ob das zweite Byte ein UTF-16-High-Byte ist
         return len(raw) >= 2 and raw[1] < 0x08
-    # Sample up to 8 bytes for detection
+    # Für die Erkennung bis zu 8 Bytes betrachten
     sample_len = min(8, len(raw))
     sample = raw[:sample_len]
     odd_bytes = sample[1::2]
     high_count = sum(1 for b in odd_bytes if b < 0x08)
-    # More than half of odd-position bytes are UTF-16 high bytes → UTF-16 LE
+    # Mehr als die Hälfte der ungeraden Bytes sind High-Bytes → UTF-16 LE
     return high_count > len(odd_bytes) // 2
 
 
 def _decode_string(raw: bytes) -> str:
     """
-    Decode a string field from Schichtplaner5 .DBF files.
+    Dekodiert ein Zeichenfeld aus Schichtplaner5-.DBF-Dateien.
 
-    SP5 uses two different encodings for Character fields:
-    - Text fields (NAME, SHORTNAME, etc.): UTF-16 LE, padded with 0x20
-    - Data fields (WORKDAYS, STARTEND*, etc.): plain ASCII, padded with 0x20
+    SP5 nutzt zwei Kodierungen für Character-Felder:
+    - Textfelder (NAME, SHORTNAME, …): UTF-16 LE, mit 0x20 aufgefüllt
+    - Datenfelder (WORKDAYS, STARTEND*, …): reines ASCII, mit 0x20 aufgefüllt
 
-    We detect UTF-16 LE by checking if odd-indexed bytes are 0x00.
+    UTF-16 LE wird über die 0x00-Bytes an ungeraden Positionen erkannt.
     """
     if not raw:
         return ""
 
     if _is_utf16_le(raw):
-        # UTF-16 LE encoded text: find null terminator (0x00 0x00 at even offset)
+        # UTF-16-LE-Text: Null-Terminator suchen (0x00 0x00 an gerader Position)
         end = len(raw)
         for i in range(0, len(raw) - 1, 2):
             if raw[i] == 0x00 and raw[i + 1] == 0x00:
@@ -89,8 +90,8 @@ def _decode_string(raw: bytes) -> str:
         except Exception:
             pass
 
-    # Plain ASCII / binary data field (WORKDAYS, STARTEND*, etc.)
-    # Strip trailing spaces/nulls and decode as latin-1 to preserve all byte values
+    # Reines ASCII-/Binär-Datenfeld (WORKDAYS, STARTEND*, …): abschließende
+    # Leerzeichen/Nullen strippen und als latin-1 dekodieren (erhält alle Bytewerte)
     stripped = raw.rstrip(b"\x00\x20")
     try:
         return stripped.decode("latin-1").strip()
@@ -99,19 +100,19 @@ def _decode_string(raw: bytes) -> str:
 
 
 def _parse_date(raw: str) -> str | None:
-    """Parse dBASE date string YYYYMMDD to ISO format.
+    """Parst einen dBASE-Datumsstring YYYYMMDD ins ISO-Format.
 
-    Returns None for anything that is not a real calendar date. Full calendar
-    validation (via :class:`datetime.date`) rejects impossible dates such as
-    ``20230231`` (Feb 31), which the previous ``day <= 31`` check let through and
-    which would later crash ``date.fromisoformat`` downstream.
+    Liefert None für alles, was kein reales Kalenderdatum ist. Die volle
+    Kalender-Validierung (über :class:`datetime.date`) weist unmögliche Daten
+    wie ``20230231`` (31. Februar) ab, die der frühere ``day <= 31``-Check
+    durchließ und die später ``date.fromisoformat`` hätten crashen lassen.
     """
     s = raw.strip()
     if len(s) == 8 and s.isdigit():
         try:
             year, month, day = int(s[:4]), int(s[4:6]), int(s[6:8])
             if year > 0:
-                # Constructing date() validates month/day for the given month/year.
+                # date() validiert Monat/Tag für das jeweilige Jahr beim Konstruieren.
                 return date(year, month, day).isoformat()
         except ValueError:
             pass
@@ -212,21 +213,21 @@ def _parse_record(
 
 def read_dbf(filepath: str, encoding_hint: str = "utf-16-le") -> list[dict[str, Any]]:
     """
-    Read a .DBF file and return a list of records as dicts.
-    String fields are decoded as UTF-16 LE (as used by Schichtplaner5);
-    binary C fields (``BINARY_C_FIELDS``) come back as raw ``bytes``.
-    Duplicate field names are disambiguated position-based (``_dedupe_names``):
-    5DADEM's second ``START`` field is exposed as ``START2``.
+    Liest eine .DBF-Datei und liefert die Datensätze als Liste von dicts.
+    Zeichenfelder werden als UTF-16 LE dekodiert (wie von Schichtplaner5
+    genutzt); binäre C-Felder (``BINARY_C_FIELDS``) kommen als rohe ``bytes``.
+    Doppelte Feldnamen werden positionsbasiert eindeutig gemacht
+    (``_dedupe_names``): das zweite ``START``-Feld von 5DADEM heißt ``START2``.
 
-    Returns an empty list if the file does not exist, is unreadable, or is
-    corrupted — callers should treat an empty result as "no data" and not
-    crash.
+    Liefert eine leere Liste, wenn die Datei fehlt, nicht lesbar oder
+    beschädigt ist — Aufrufer behandeln ein leeres Ergebnis als „keine Daten"
+    und dürfen nicht crashen.
     """
     try:
         with open(filepath, "rb") as f:
             data = f.read()
     except OSError:
-        # File missing, no permissions, or deleted between exists-check and open
+        # Datei fehlt, keine Rechte, oder zwischen Existenz-Check und open gelöscht
         return []
     return read_dbf_buffer(data)
 
@@ -241,14 +242,14 @@ def read_dbf_buffer(data: bytes) -> list[dict[str, Any]]:
     if len(data) < 32:
         return []
     f = io.BytesIO(data)
-    # Read header (32 bytes)
+    # Header lesen (32 Bytes)
     header = f.read(32)
 
     num_records = struct.unpack_from("<I", header, 4)[0]
     header_size = struct.unpack_from("<H", header, 8)[0]
     record_size = struct.unpack_from("<H", header, 10)[0]
 
-    # Read field descriptors (32 bytes each, terminated by 0x0D)
+    # Felddeskriptoren lesen (je 32 Bytes, terminiert mit 0x0D)
     fields: list[dict[str, Any]] = []
     f.seek(32)
     while True:
@@ -266,7 +267,7 @@ def read_dbf_buffer(data: bytes) -> list[dict[str, Any]]:
         fdec = field_data[17]
         fields.append({"name": name, "type": ftype, "len": flen, "dec": fdec})
 
-    # Read records
+    # Datensätze lesen
     f.seek(header_size)
     records = []
     names = _dedupe_names([str(f_["name"]) for f_ in fields])
@@ -278,7 +279,7 @@ def read_dbf_buffer(data: bytes) -> list[dict[str, Any]]:
         if not raw or len(raw) < record_size:
             break
 
-        # Skip deleted records (first byte = 0x2A = '*')
+        # Gelöschte Datensätze überspringen (erstes Byte = 0x2A = '*')
         if raw[0] == 0x2A:
             continue
 
@@ -288,7 +289,7 @@ def read_dbf_buffer(data: bytes) -> list[dict[str, Any]]:
 
 
 def get_table_fields(filepath: str) -> list[dict[str, Any]]:
-    """Return field definitions for a .DBF file."""
+    """Liefert die Felddefinitionen einer .DBF-Datei."""
     try:
         open_file = open(filepath, "rb")
     except OSError:
@@ -296,7 +297,7 @@ def get_table_fields(filepath: str) -> list[dict[str, Any]]:
     with open_file as f:
         hdr = f.read(32)
         if len(hdr) < 32:
-            return []  # empty or truncated file
+            return []  # leere oder abgeschnittene Datei
         fields = []
         while True:
             field_data = f.read(32)
