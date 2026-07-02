@@ -1,5 +1,5 @@
 """
-High-level database access for Schichtplaner5 .DBF files.
+High-Level-Datenbankzugriff auf Schichtplaner5-.DBF-Dateien.
 """
 
 import calendar
@@ -37,11 +37,11 @@ from .dbf_writer import (
 
 _db_logger = logging.getLogger("sp5api")
 
-# ── Global cross-request DBF cache ──────────────────────────────
-# Maps (db_path, table_name) → (mtime, data)
-# Avoids re-reading unchanged DBF files across requests.
-# RLock (re-entrant) because _read() and _invalidate_cache() may be called
-# from the same thread (e.g. write path calls _invalidate_cache then _read).
+# ── Globaler Request-übergreifender DBF-Cache ───────────────────
+# Bildet (db_path, table_name) → (mtime, data) ab.
+# Erspart das Neu-Einlesen unveränderter DBF-Dateien über Requests hinweg.
+# RLock (re-entrant), weil _read() und _invalidate_cache() aus demselben
+# Thread kommen können (z. B. ruft der Schreibpfad _invalidate_cache, dann _read).
 _GLOBAL_DBF_CACHE: dict[tuple, tuple] = {}
 # Lese-Schicht über dem DBF-Cache: (db_path, table, date_field) → (mtime,
 # {YYYY-MM: [records]}). Gruppiert datierte Tabellen (5MASHI) nach Monat, damit
@@ -198,11 +198,11 @@ class SP5Database:
         return index
 
     def _invalidate_cache(self, name: str) -> None:
-        """Invalidate the global cache for a table after a write operation.
+        """Verwirft den globalen Cache-Eintrag einer Tabelle nach einem Write.
 
-        Usually not needed because _read() re-checks mtime automatically,
-        but explicit invalidation is useful when the file is written and
-        immediately re-read within the same OS tick (mtime granularity).
+        Meist unnötig, weil _read() die mtime automatisch neu prüft — explizit
+        invalidieren hilft aber, wenn die Datei im selben OS-Zeittick
+        geschrieben und sofort neu gelesen wird (mtime-Granularität).
         """
         key = (self.db_path, name)
         with _CACHE_LOCK:
@@ -342,7 +342,7 @@ class SP5Database:
 
     # ── Employees ──────────────────────────────────────────────
     def get_employees(self, include_hidden: bool = False) -> list[dict]:
-        """Return list of active employees, optionally including hidden ones."""
+        """Liefert die aktiven Mitarbeiter, optional inklusive versteckter."""
         rows = self._read("EMPL")
         result = []
         for r in rows:
@@ -400,7 +400,7 @@ class SP5Database:
 
     # ── Groups ─────────────────────────────────────────────────
     def get_groups(self, include_hidden: bool = False) -> list[dict]:
-        """Return list of shift groups, optionally including hidden ones."""
+        """Liefert die Gruppen, optional inklusive versteckter."""
         rows = self._read("GROUP")
         if not include_hidden:
             rows = [r for r in rows if not r.get("HIDE")]
@@ -410,12 +410,12 @@ class SP5Database:
         return rows
 
     def get_group_members(self, group_id: int) -> list[int]:
-        """Return list of employee IDs in a group."""
+        """Liefert die Mitarbeiter-IDs einer Gruppe."""
         assignments = self._read("GRASG")
         return [a["EMPLOYEEID"] for a in assignments if a.get("GROUPID") == group_id]
 
     def get_all_group_members(self) -> dict[int, list[int]]:
-        """Return a mapping of group_id -> [employee_ids] in one pass (avoids N+1)."""
+        """Liefert group_id -> [employee_ids] in EINEM Durchlauf (vermeidet N+1)."""
         assignments = self._read("GRASG")
         result: dict[int, list[int]] = {}
         for a in assignments:
@@ -426,7 +426,7 @@ class SP5Database:
         return result
 
     def get_employee_groups(self, emp_id: int) -> list[int]:
-        """Return list of group IDs an employee belongs to."""
+        """Liefert die Gruppen-IDs, denen ein Mitarbeiter angehört."""
         assignments = self._read("GRASG")
         return [a["GROUPID"] for a in assignments if a.get("EMPLOYEEID") == emp_id]
 
@@ -493,7 +493,7 @@ class SP5Database:
 
     # ── Holidays ───────────────────────────────────────────────
     def get_holidays(self, year: int | None = None) -> list[dict]:
-        """Return public holidays for the given year and state."""
+        """Liefert die Feiertage für Jahr und Bundesland."""
         rows = self._read("HOLID")
         if year is not None:
             result = []
@@ -646,7 +646,7 @@ class SP5Database:
                     }
                 )
 
-        # Enrich with shift/leave-type/workplace data
+        # Mit Schicht-/Abwesenheitsart-/Arbeitsplatzdaten anreichern
         shifts_map = {s["ID"]: s for s in self.get_shifts(include_hidden=True)}
         lt_map = {lt["ID"]: lt for lt in self.get_leave_types(include_hidden=True)}
         wp_map = {w["ID"]: w for w in self.get_workplaces(include_hidden=True)}
@@ -782,28 +782,30 @@ class SP5Database:
         return "Planer"
 
     def _hash_password_md5(self, password: str) -> bytes:
-        """Return 16-byte MD5 digest of password (legacy, matches 5USER.DBF DIGEST field)."""
+        """Liefert den 16-Byte-MD5-Digest des Passworts (Legacy, wie 5USER.DIGEST)."""
         import hashlib
 
         return hashlib.md5(password.encode("utf-8")).digest()
 
-    # The original Schichtplaner5 (Delphi/Windows) stores each password as an
-    # unsalted 16-byte MD5 digest in 5USER.DIGEST. Its own login routine
-    # (SP5Data.dll FUN_100431a0) verifies a typed password against the stored
-    # digest under TWO encodings: the Delphi WideString (UTF-16-LE) first, then,
-    # on mismatch, the system ANSI codepage (CP1252 on a German Windows, via
-    # WideCharToMultiByte/AtlGetThreadACP). The set-password routine writes the
-    # UTF-16-LE digest, while pre-Unicode (Delphi <2009) builds wrote the ANSI
-    # one — so a real DB mixes both (sample DB: Bartel "a" = MD5(b"a") ANSI vs
-    # Leitung "a" = MD5(b"a\x00") UTF-16-LE). We replicate that dual-encoding
-    # check and also accept UTF-8 because our own writer (_hash_password_md5)
-    # emits UTF-8 (== CP1252 for ASCII). A successful legacy login migrates to
-    # bcrypt, so this only matters for the first login of an unmigrated account.
+    # Das Original-Schichtplaner5 (Delphi/Windows) speichert jedes Passwort als
+    # ungesalzenen 16-Byte-MD5-Digest in 5USER.DIGEST. Seine Login-Routine
+    # (SP5Data.dll FUN_100431a0) prüft ein getipptes Passwort gegen den Digest
+    # unter ZWEI Kodierungen: zuerst Delphi-WideString (UTF-16-LE), bei
+    # Nichtübereinstimmung die System-ANSI-Codepage (CP1252 auf deutschem
+    # Windows, via WideCharToMultiByte/AtlGetThreadACP). Die Passwort-setzen-
+    # Routine schreibt den UTF-16-LE-Digest, Vor-Unicode-Builds (Delphi <2009)
+    # schrieben den ANSI-Digest — eine reale DB mischt also beide (Beispiel-DB:
+    # Bartel "a" = MD5(b"a") ANSI vs. Leitung "a" = MD5(b"a\x00") UTF-16-LE).
+    # Wir bilden diese Doppel-Kodierungs-Prüfung nach und akzeptieren
+    # zusätzlich UTF-8, weil unser eigener Writer (_hash_password_md5) UTF-8
+    # ausgibt (== CP1252 für ASCII). Ein erfolgreicher Legacy-Login migriert
+    # auf bcrypt — das Ganze zählt also nur beim ersten Login eines noch nicht
+    # migrierten Kontos.
     _LEGACY_MD5_ENCODINGS = ("utf-8", "cp1252", "utf-16-le")
 
     def _legacy_md5_encoding(self, password: str, digest_bytes: bytes) -> str | None:
-        """Return the encoding under which MD5(password) equals the stored 16-byte
-        digest, or None if none match. See ``_LEGACY_MD5_ENCODINGS``."""
+        """Liefert die Kodierung, unter der MD5(password) dem gespeicherten
+        16-Byte-Digest entspricht, sonst None. Siehe ``_LEGACY_MD5_ENCODINGS``."""
         import hashlib
 
         if len(digest_bytes) != 16:
@@ -818,19 +820,19 @@ class SP5Database:
         return None
 
     # ── Bcrypt sidecar store ──────────────────────────────────
-    # Bcrypt hashes are 60 chars and don't fit the 16-byte DIGEST field in
-    # 5USER.DBF, so we store them in a JSON sidecar file next to the DBF.
+    # Bcrypt-Hashes haben 60 Zeichen und passen nicht ins 16-Byte-DIGEST-Feld
+    # von 5USER.DBF — sie liegen daher in einer JSON-Sidecar-Datei neben der DBF.
 
     def _bcrypt_path(self) -> str:
         return os.path.join(self.db_path, "5USER_BCRYPT.json")
 
-    # ── TOTP 2FA sidecar ──────────────────────────────────────
+    # ── TOTP-2FA-Sidecar ──────────────────────────────────────
 
     def _totp_path(self) -> str:
         return os.path.join(self.db_path, "5USER_TOTP.json")
 
     def _load_totp_data(self) -> dict:
-        """Load {user_id_str: {secret, backup_codes, enabled}} from sidecar."""
+        """Lädt {user_id_str: {secret, backup_codes, enabled}} aus dem Sidecar."""
         path = self._totp_path()
         if not os.path.exists(path):
             return {}
@@ -846,13 +848,13 @@ class SP5Database:
             json.dump(data, f, ensure_ascii=False)
 
     def totp_get_status(self, user_id: int) -> bool:
-        """Return True if TOTP 2FA is enabled for user."""
+        """Liefert True, wenn TOTP-2FA für den Benutzer aktiviert ist."""
         data = self._load_totp_data()
         entry = data.get(str(user_id), {})
         return bool(entry.get("enabled"))
 
     def totp_generate_secret(self, user_id: int) -> str:
-        """Generate and store a pending TOTP secret (not yet enabled)."""
+        """Erzeugt und speichert ein schwebendes TOTP-Secret (noch nicht aktiviert)."""
         import pyotp
         secret = pyotp.random_base32()
         data = self._load_totp_data()
@@ -865,7 +867,7 @@ class SP5Database:
         return secret
 
     def totp_enable(self, user_id: int, code: str) -> list[str] | None:
-        """Verify code against pending secret and enable 2FA. Returns backup codes or None."""
+        """Prüft den Code gegen das schwebende Secret und aktiviert 2FA. Liefert Backup-Codes oder None."""
         import hashlib
         import secrets
 
@@ -887,7 +889,7 @@ class SP5Database:
         return backup_codes
 
     def totp_verify(self, user_id: int, code: str) -> bool:
-        """Verify a TOTP code or backup code. Returns True if valid."""
+        """Prüft einen TOTP- oder Backup-Code. Liefert True bei Gültigkeit."""
         import hashlib
 
         import pyotp
@@ -909,7 +911,7 @@ class SP5Database:
         return False
 
     def totp_disable(self, user_id: int) -> bool:
-        """Disable 2FA for a user."""
+        """Deaktiviert 2FA für einen Benutzer."""
         data = self._load_totp_data()
         uid = str(user_id)
         if uid in data:
@@ -919,7 +921,7 @@ class SP5Database:
         return False
 
     def _load_bcrypt_hashes(self) -> dict[str, str]:
-        """Load {user_id_str: bcrypt_hash} from sidecar file."""
+        """Lädt {user_id_str: bcrypt_hash} aus der Sidecar-Datei."""
         path = self._bcrypt_path()
         if not os.path.exists(path):
             return {}
@@ -930,7 +932,7 @@ class SP5Database:
             return {}
 
     def _save_bcrypt_hash(self, user_id: int, bcrypt_hash: str) -> None:
-        """Persist a bcrypt hash for a user (merge into sidecar file)."""
+        """Persistiert den bcrypt-Hash eines Benutzers (Merge in die Sidecar-Datei)."""
         hashes = self._load_bcrypt_hashes()
         hashes[str(user_id)] = bcrypt_hash
         path = self._bcrypt_path()
@@ -938,14 +940,14 @@ class SP5Database:
             json.dump(hashes, f, ensure_ascii=False)
 
     def _hash_password(self, password: str) -> bytes:
-        """Return 16-byte MD5 digest for DBF storage (legacy compat).
+        """Liefert den 16-Byte-MD5-Digest für die DBF-Ablage (Legacy-Kompatibilität).
 
-        New code should call _hash_password_bcrypt instead.
+        Neuer Code ruft stattdessen _hash_password_bcrypt.
         """
         return self._hash_password_md5(password)
 
     def _hash_password_bcrypt(self, password: str) -> str:
-        """Return bcrypt hash string for the given password."""
+        """Liefert den bcrypt-Hash-String für das Passwort."""
         import bcrypt
 
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -1325,8 +1327,8 @@ class SP5Database:
             matched_encoding = self._legacy_md5_encoding(password, digest_bytes)
             if matched_encoding is not None:
                 # ── 3. Auto-migrate to bcrypt on successful MD5 login ──
-                # matched_encoding lands in the operator log so a real-DB login
-                # path (e.g. "matched via utf-16-le") is visible without the password.
+                # matched_encoding landet im Betreiber-Log, damit der Login-Pfad
+                # einer echten DB (z. B. „via utf-16-le") ohne das Passwort sichtbar ist.
                 try:
                     new_hash = self._hash_password_bcrypt(password)
                     self._save_bcrypt_hash(user_id, new_hash)
