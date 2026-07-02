@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Vertretungssuche: eigene Gruppe zuerst, andere Gruppen nachrangig statt
+  ausgeschlossen.** `eligible_replacements` ohne explizite Gruppe schloss
+  Mitarbeiter ohne gemeinsame Gruppe komplett aus. Jetzt sind alle sonst
+  geeigneten Mitarbeiter Kandidaten: Mitglieder einer gemeinsamen Gruppe des
+  ausgefallenen Mitarbeiters kommen zuerst (neues Feld `same_group`), die
+  übrigen danach — jeweils alphabetisch. Eine explizit übergebene `group_id`
+  filtert weiterhin hart.
+
 ## [1.25.0] - 2026-07-01
 
 ### Changed

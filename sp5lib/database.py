@@ -5953,26 +5953,30 @@ class SP5Database:
         Tag weder in 5MASHI/5SPSHI eingeteilt noch in 5ABSEN abwesend) und
         Schichtkompatibilität (keine 5RESTR-Sperre für Wochentag/Schicht).
 
-        ``group_id`` schränkt den Bereich explizit ein; ohne Angabe gilt als
-        Bereich die Schnittmenge der Gruppen des ausgefallenen Mitarbeiters
-        (gemeinsame Gruppe genügt). Liefert nur geeignete Kandidaten, nach
-        Name sortiert.
+        ``group_id`` schränkt den Bereich explizit und HART auf diese Gruppe
+        ein. Ohne Angabe sind alle sonst geeigneten Mitarbeiter Kandidaten;
+        Mitglieder einer gemeinsamen Gruppe des ausgefallenen Mitarbeiters
+        kommen ZUERST (``same_group`` = True), erst danach die übrigen —
+        innerhalb beider Blöcke alphabetisch nach Name.
         """
         d = calc.to_date(date_str)
         if d is None:
             raise ValueError(f"Ungültiges Datum: {date_str!r}")
         holidays = self._calc_holidays()
 
-        # Bereich bestimmen: explizite Gruppe ODER Gruppen des Ausfall-MA.
+        # Bereich bestimmen: explizite Gruppe (hart) ODER Gruppen des
+        # Ausfall-MA (weich: priorisiert, schließt aber nicht aus).
         members_by_group = self.get_all_group_members()
         if group_id is not None:
-            allowed_ids: set[int] = set(members_by_group.get(group_id, []))
+            allowed_ids: set[int] | None = set(members_by_group.get(group_id, []))
+            same_group_ids = allowed_ids
         else:
+            allowed_ids = None
             absent_groups = [
                 gid for gid, members in members_by_group.items()
                 if absent_employee_id in members
             ]
-            allowed_ids = {
+            same_group_ids = {
                 eid
                 for gid in absent_groups
                 for eid in members_by_group.get(gid, [])
@@ -6007,7 +6011,7 @@ class SP5Database:
                 shift_id,
                 holidays,
                 is_hidden=bool(emp.get("HIDE")),
-                in_group=eid in allowed_ids,
+                in_group=(allowed_ids is None) or (eid in allowed_ids),
                 busy_dates=busy_by_emp.get(eid, set()),
                 absent_dates=absent_by_emp.get(eid, set()),
                 restrictions=restr_by_emp.get(eid, []),
@@ -6022,9 +6026,12 @@ class SP5Database:
                     "shortname": emp.get("SHORTNAME", ""),
                     "function": emp.get("FUNCTION", "") or "",
                     "hrs_week": emp.get("HRSWEEK", 0.0) or 0.0,
+                    "same_group": eid in same_group_ids,
                 }
             )
-        candidates.sort(key=lambda c: (c["name"].lower(), c["firstname"].lower()))
+        candidates.sort(
+            key=lambda c: (not c["same_group"], c["name"].lower(), c["firstname"].lower())
+        )
         return candidates
 
     # ── Write: Periods ────────────────────────────────────────

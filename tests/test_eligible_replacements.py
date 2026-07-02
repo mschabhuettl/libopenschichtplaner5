@@ -178,11 +178,16 @@ def db(tmp_path):
     return SP5Database(str(tmp_path))
 
 
-def test_facade_returns_only_group_members_available(db):
+def test_facade_prioritizes_same_group_then_others(db):
+    # Gleiche Gruppe (MA2, MA3) ZUERST, danach Gruppen-fremde (MA4, Team B);
+    # MA5 abwesend; MA1 = Ausfall. Gruppen-fremde werden NICHT mehr
+    # ausgeschlossen, nur nachrangig gelistet (Maintainer-Befund 25).
     cands = db.eligible_replacements("2026-07-15", 100, absent_employee_id=1)
-    ids = {c["id"] for c in cands}
-    # MA2, MA3 geeignet; MA4 (Team B) ausgeschlossen; MA5 abwesend; MA1 = Ausfall.
-    assert ids == {2, 3}
+    assert [(c["id"], c["same_group"]) for c in cands] == [
+        (2, True),
+        (3, True),
+        (4, False),
+    ]
 
 
 def test_facade_excludes_already_scheduled(db, tmp_path):
@@ -192,7 +197,7 @@ def test_facade_excludes_already_scheduled(db, tmp_path):
     append_record(mp, get_table_fields(mp), {"ID": 1, "EMPLOYEEID": 2, "DATE": "2026-07-15", "SHIFTID": 100})
     db._invalidate_cache("MASHI")
     ids = {c["id"] for c in db.eligible_replacements("2026-07-15", 100, absent_employee_id=1)}
-    assert ids == {3}  # MA2 ist nun eingeteilt
+    assert ids == {3, 4}  # MA2 ist nun eingeteilt; MA4 (fremde Gruppe) nachrangig dabei
 
 
 def test_facade_excludes_restricted(db, tmp_path):
@@ -203,7 +208,7 @@ def test_facade_excludes_restricted(db, tmp_path):
     append_record(rp, get_table_fields(rp), {"ID": 1, "EMPLOYEEID": 3, "WEEKDAY": 2, "SHIFTID": 100, "RESTRICT": 1})
     db._invalidate_cache("RESTR")
     ids = {c["id"] for c in db.eligible_replacements("2026-07-15", 100, absent_employee_id=1)}
-    assert ids == {2}
+    assert ids == {2, 4}
 
 
 def test_facade_explicit_group_filter(db):
